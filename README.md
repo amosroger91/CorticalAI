@@ -182,6 +182,3 @@ MIT
 
 **CorticalAI**: Make custom AI agents in minutes, not weeks. Streamline function calls, integrate APIs, and get your agents running fast.
 `;
-# CorticalAI
-# CorticalAI
-# CorticalAI
