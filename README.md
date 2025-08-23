@@ -40,7 +40,7 @@ Developers often struggle with starting AI projects because:
 ## Installation
 
 ```bash
-git clone <repo_url>
+git clone https://github.com/amosroger91/CorticalAI.git
 cd CorticalAI
 npm install
 ```
