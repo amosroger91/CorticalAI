@@ -1,7 +1,7 @@
 # CorticalAI – Build Custom AI Agents in Minutes
 
 <p align="center">
-  <img src="./assets/logo.png" alt="CorticalAI Logo" width="200" style="margin-top:-40px; margin-bottom:-40px;" />
+  <img src="./assets/logo.png" alt="CorticalAI Logo" style="max-height:120px; margin-top:-20px; margin-bottom:-20px;" />
 </p>
 
 Inspired by the Cortical Scanner Dr. Halsey used to create Cortana in the Halo series, CorticalAI lets you spin up fully functional AI agents in minutes, not hours. Build assistants that can think, interact, call APIs, and control the browser seamlessly—giving you the power to automate tasks and experiment with AI faster than ever.
