@@ -11,6 +11,7 @@ export class LLMFramework {
     constructor(config) {
         this.config = this.mergeWithDefaults(config);
         this.app = express();
+        this.examplePrompts = []; // Cache for generated examples
         this.setupMiddleware();
         this.validateConfiguration();
     }
@@ -33,13 +34,47 @@ export class LLMFramework {
                 description: process.env.APP_DESCRIPTION || "AI-powered assistant",
                 welcomeMessage: process.env.APP_WELCOMEMESSAGE || "Hello! How can I help you today?",
                 primaryColor: `#${process.env.APP_PRIMARYCOLOR}` || "#007bff",
-                secondaryColor: `#${process.env.APP_SECONDARYCOLOR}` || "#6c757d"
+                secondaryColor: `#${process.env.APP_SECONDARYCOLOR}` || "#6c757d",
+                backgroundImage: process.env.APP_BACKGROUND_IMAGE || null,
+                chatOpacity: parseFloat(process.env.APP_CHAT_OPACITY) || 0.95,
+                logo: process.env.APP_LOGO || null,
+                navigationLinks: this.parseNavigationLinks(process.env.APP_NAVIGATION_LINKS),
+                browserActions: process.env.APP_BROWSER_ACTIONS !== 'false'
             },
             functionPattern: new RegExp(process.env.APP_FUNCTION_PATTERN || "^FUNCTION:(\\w+):(.+)$"),
-            functions: {}
+            functions: {},
+            // Example generation settings
+            examples: {
+                enabled: process.env.APP_EXAMPLES_ENABLED !== 'false',
+                count: parseInt(process.env.APP_EXAMPLES_COUNT) || 6,
+                regenerateOnStart: process.env.APP_EXAMPLES_REGENERATE !== 'false'
+            }
         };
 
         return this.deepMerge(defaults, config);
+    }
+
+    parseNavigationLinks(envValue) {
+        if (!envValue) return null;
+
+        try {
+            // Expected format: "Home|/,About|/about,Contact|https://example.com|true"
+            // Format: text|url|external(optional, defaults to true for https://)
+            return envValue.split(',').map(link => {
+                const parts = link.trim().split('|');
+                if (parts.length < 2) return null;
+
+                const [text, url, external] = parts;
+                return {
+                    text: text.trim(),
+                    url: url.trim(),
+                    external: external !== undefined ? external === 'true' : url.startsWith('http')
+                };
+            }).filter(link => link !== null);
+        } catch (error) {
+            console.warn('Failed to parse navigation links:', error);
+            return null;
+        }
     }
 
     deepMerge(target, source) {
@@ -89,7 +124,179 @@ export class LLMFramework {
             }
         }
 
+        // Auto-register browser functions if enabled
+        if (this.config.app.browserActions) {
+            this.registerBrowserFunctions();
+        }
+
         console.log('✅ Configuration validated successfully');
+    }
+
+    registerBrowserFunctions() {
+        const browserFunctions = {
+            showAlert: {
+                handler: async (message) => {
+                    return {
+                        success: true,
+                        browserAction: 'alert',
+                        data: { message }
+                    };
+                },
+                parseArgs: (rawArgs) => rawArgs.trim()
+            },
+            openWindow: {
+                handler: async (url) => {
+                    return {
+                        success: true,
+                        browserAction: 'openWindow',
+                        data: { url }
+                    };
+                },
+                parseArgs: (rawArgs) => rawArgs.trim()
+            },
+            showModal: {
+                handler: async (url) => {
+                    return {
+                        success: true,
+                        browserAction: 'modal',
+                        data: { url }
+                    };
+                },
+                parseArgs: (rawArgs) => rawArgs.trim()
+            },
+            speak: {
+                handler: async (text) => {
+                    return {
+                        success: true,
+                        browserAction: 'speak',
+                        data: { text }
+                    };
+                },
+                parseArgs: (rawArgs) => rawArgs.trim()
+            }
+        };
+
+        // Merge browser functions with user-defined functions
+        this.config.functions = { ...this.config.functions, ...browserFunctions };
+        console.log(`🌐 Registered ${Object.keys(browserFunctions).length} browser functions`);
+    }
+
+    getBrowserActionConfirmation(action, data) {
+        switch (action) {
+            case 'alert':
+                return `Alert displayed: "${data.message}"`;
+            case 'openWindow':
+                return `Opening new tab: ${data.url}`;
+            case 'modal':
+                return `Opening modal with: ${data.url}`;
+            case 'speak':
+                return `Speaking: "${data.text}"`;
+            default:
+                return `Browser action completed: ${action}`;
+        }
+    }
+
+    // Generate example prompts using the LLM
+    async generateExamplePrompts() {
+        if (!this.config.examples.enabled) {
+            return ['Hello', 'What can you help me with?'];
+        }
+
+        try {
+            const functionNames = Object.keys(this.config.functions);
+            const hasFunction = functionNames.length > 0;
+
+            let examplePrompt = `You are ${this.config.app.name}. ${this.config.app.description}
+
+Based on your capabilities, generate ${this.config.examples.count} example questions or requests that users might ask you. 
+
+${hasFunction ? `You have these functions available: ${functionNames.join(', ')}` : 'You are a conversational assistant.'}
+
+Return ONLY a JSON array of strings, no other text. Each string should be a realistic user question or request that you can handle well.
+
+Example format: ["Question 1", "Question 2", "Question 3"]
+
+Generate varied examples that show different aspects of what you can do:`;
+
+            console.log('🔄 Generating example prompts...');
+
+            const response = await fetch(this.config.llm.endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    model: this.config.llm.model,
+                    prompt: examplePrompt,
+                    stream: false
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`LLM API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const responseText = data.response.trim();
+
+            console.log('🤖 Raw LLM response for examples:', responseText);
+
+            // Try to extract JSON from the response
+            let examples;
+            try {
+                // Look for JSON array in the response
+                const jsonMatch = responseText.match(/\[(.*?)\]/s);
+                if (jsonMatch) {
+                    examples = JSON.parse(jsonMatch[0]);
+                } else {
+                    // Try parsing the whole response as JSON
+                    examples = JSON.parse(responseText);
+                }
+            } catch (parseError) {
+                console.warn('⚠️ Failed to parse LLM response as JSON, using fallback examples');
+                examples = this.getFallbackExamples();
+            }
+
+            // Validate and clean examples
+            if (Array.isArray(examples) && examples.length > 0) {
+                this.examplePrompts = examples
+                    .filter(ex => typeof ex === 'string' && ex.trim().length > 0)
+                    .map(ex => ex.trim())
+                    .slice(0, this.config.examples.count);
+
+                console.log('✅ Generated examples:', this.examplePrompts);
+                return this.examplePrompts;
+            } else {
+                throw new Error('Invalid examples format from LLM');
+            }
+
+        } catch (error) {
+            console.error('❌ Failed to generate examples:', error);
+            this.examplePrompts = this.getFallbackExamples();
+            return this.examplePrompts;
+        }
+    }
+
+    getFallbackExamples() {
+        const functionNames = Object.keys(this.config.functions);
+
+        if (functionNames.length > 0) {
+            return [
+                'Hello, what can you help me with?',
+                `Can you use your ${functionNames[0]} function?`,
+                'Tell me about your capabilities',
+                'What functions do you have available?',
+                'Help me get started',
+                'Show me what you can do'
+            ];
+        } else {
+            return [
+                'Hello, how are you?',
+                'What can you help me with today?',
+                'Tell me something interesting',
+                'How can I get started?',
+                'What are your capabilities?',
+                'Can you assist me with questions?'
+            ];
+        }
     }
 
     detectFunctionCall(text) {
@@ -288,7 +495,24 @@ Assistant responds: `,
                         console.log('Function result:', result);
 
                         // Handle different result types
-                        if (result.success && result.results) {
+                        if (result.success && result.browserAction) {
+                            // Send browser action to frontend
+                            res.write(`data: ${JSON.stringify({
+                                type: "browser_action",
+                                action: result.browserAction,
+                                data: result.data
+                            })} \n\n`);
+
+                            // Send confirmation message
+                            res.write(`data: ${JSON.stringify({
+                                type: "token",
+                                text: this.getBrowserActionConfirmation(result.browserAction, result.data)
+                            })} \n\n`);
+
+                            res.write(`data: ${JSON.stringify({ type: "done" })} \n\n`);
+                            res.end();
+                            return;
+                        } else if (result.success && result.results) {
                             res.write(`data: ${JSON.stringify({
                                 type: "search_results",
                                 results: result.results,
@@ -388,6 +612,26 @@ Assistant responds: `,
             }
         });
 
+        // Examples endpoint
+        this.app.get("/examples", async (req, res) => {
+            try {
+                if (this.examplePrompts.length === 0 || this.config.examples.regenerateOnStart) {
+                    await this.generateExamplePrompts();
+                }
+
+                res.json({
+                    success: true,
+                    examples: this.examplePrompts
+                });
+            } catch (error) {
+                console.error('Failed to get examples:', error);
+                res.json({
+                    success: false,
+                    examples: this.getFallbackExamples()
+                });
+            }
+        });
+
         this.app.get("/", (req, res) => {
             res.send(generateUI(this.config));
         });
@@ -398,13 +642,20 @@ Assistant responds: `,
                 status: "ok",
                 app: this.config.app.name,
                 functions: Object.keys(this.config.functions).length,
+                examples: this.examplePrompts.length,
                 timestamp: new Date().toISOString()
             });
         });
     }
 
-    start() {
+    async start() {
         this.setupRoutes();
+
+        // Generate examples on startup if enabled
+        if (this.config.examples.enabled) {
+            this.generateExamplePrompts().catch(console.error);
+        }
+
         this.app.listen(this.config.server.port, this.config.server.ip, () => {
             console.log(`
 ╔════════════════════════════════════════════════════════════════╗
@@ -413,6 +664,8 @@ Assistant responds: `,
 ║  🚀 Server: http://${this.config.server.ip}:${this.config.server.port}                               ║
 ║  🤖 Model: ${this.config.llm.model.padEnd(49)} ║
 ║  ⚡ Functions: ${Object.keys(this.config.functions).length.toString().padEnd(44)} ║
+║  💡 Examples: ${this.config.examples.enabled ? 'Enabled' : 'Disabled'}                                     ║
+║  🌐 Browser Actions: ${this.config.app.browserActions ? 'Enabled' : 'Disabled'}                            ║
 ║  ✅ Status: Ready                                              ║
 ╚════════════════════════════════════════════════════════════════╝
         `);

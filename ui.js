@@ -1,11 +1,19 @@
 export function generateUI(config) {
-    // Ensure colors have # prefix and are valid hex colors
-    const primaryColor = config.app.primaryColor?.startsWith('#') ? config.app.primaryColor : `#${config.app.primaryColor || '1DB954'}`;
-    const secondaryColor = config.app.secondaryColor?.startsWith('#') ? config.app.secondaryColor : `#${config.app.secondaryColor || '191414'}`;
+  // Ensure colors have # prefix and are valid hex colors
+  const primaryColor = config.app.primaryColor?.startsWith('#') ? config.app.primaryColor : `#${config.app.primaryColor || '1DB954'}`;
+  const secondaryColor = config.app.secondaryColor?.startsWith('#') ? config.app.secondaryColor : `#${config.app.secondaryColor || '191414'}`;
 
-    console.log('UI Colors - Primary:', primaryColor, 'Secondary:', secondaryColor); // Debug log
+  // Handle background image/video - no overlay shader
+  const backgroundStyle = config.app.backgroundImage
+    ? `background-image: url('${config.app.backgroundImage}'); background-size: cover; background-position: center;`
+    : `background: linear-gradient(135deg, ${primaryColor}15, ${secondaryColor}15);`;
 
-    return `<!DOCTYPE html>
+  // Chat window transparency (0.0 to 1.0, default 0.95)
+  const chatOpacity = config.app.chatOpacity || 0.95;
+
+  console.log('UI Colors - Primary:', primaryColor, 'Secondary:', secondaryColor); // Debug log
+
+  return `<!DOCTYPE html>
 <html>
 <head>
     <title>${config.app.name}</title>
@@ -14,14 +22,87 @@ export function generateUI(config) {
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
-          background: linear-gradient(135deg, ${primaryColor}15, ${secondaryColor}15);
+          ${backgroundStyle}
           min-height: 100vh;
+          position: relative;
+          margin: 0;
+          padding-top: ${config.app.logo || config.app.navigationLinks ? '80px' : '0'};
+        }
+        /* Video background support */
+        body::before {
+          content: '';
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          z-index: -1;
+          ${config.app.backgroundImage && (config.app.backgroundImage.endsWith('.mp4') || config.app.backgroundImage.endsWith('.webm') || config.app.backgroundImage.endsWith('.mov'))
+      ? `background: none;`
+      : ''}
+        }
+        /* Video element for video backgrounds */
+        ${config.app.backgroundImage && (config.app.backgroundImage.endsWith('.mp4') || config.app.backgroundImage.endsWith('.webm') || config.app.backgroundImage.endsWith('.mov'))
+      ? `
+        body::after {
+          content: '';
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          z-index: -1;
+          background: url('${config.app.backgroundImage}') center/cover no-repeat;
+          /* For video, we'll use a different approach in the script */
+        }` : ''}
+        .navbar {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 70px;
+          background: rgba(255,255,255,${chatOpacity});
+          backdrop-filter: blur(10px);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0 20px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          z-index: 1000;
+        }
+        .navbar-left {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+        }
+        .navbar-logo {
+          height: 40px;
+          max-width: 200px;
+          object-fit: contain;
+        }
+        .navbar-right {
+          display: flex;
+          align-items: center;
+          gap: 20px;
+        }
+        .navbar-link {
+          color: ${secondaryColor};
+          text-decoration: none;
+          font-weight: 500;
+          padding: 8px 16px;
+          border-radius: 20px;
+          transition: all 0.2s ease;
+        }
+        .navbar-link:hover {
+          background: ${primaryColor}15;
+          color: ${primaryColor};
         }
         .container { max-width: 900px; margin: 0 auto; padding: 20px; }
         .header { 
           text-align: center; 
           margin-bottom: 30px; 
-          background: white;
+          background: rgba(255,255,255,${chatOpacity});
+          backdrop-filter: blur(10px);
           padding: 30px;
           border-radius: 15px;
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
@@ -37,7 +118,8 @@ export function generateUI(config) {
           font-size: 1.2em;
         }
         .chat-container { 
-          background: white; 
+          background: rgba(255,255,255,${chatOpacity}); 
+          backdrop-filter: blur(10px);
           border-radius: 15px; 
           height: 500px; 
           overflow-y: auto; 
@@ -85,10 +167,12 @@ export function generateUI(config) {
         .input-container { 
           display: flex; 
           gap: 15px; 
-          background: white;
+          background: rgba(255,255,255,${chatOpacity});
+          backdrop-filter: blur(10px);
           padding: 20px;
           border-radius: 15px;
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+          margin-bottom: 20px;
         }
         .input-container input { 
           flex: 1; 
@@ -97,6 +181,7 @@ export function generateUI(config) {
           border-radius: 25px; 
           font-size: 16px;
           transition: border-color 0.3s ease;
+          background: rgba(255,255,255,0.9);
         }
         .input-container input:focus {
           outline: none;
@@ -121,6 +206,46 @@ export function generateUI(config) {
           cursor: not-allowed; 
           transform: none;
           box-shadow: none;
+        }
+        .example-prompts {
+          background: rgba(255,255,255,${chatOpacity});
+          backdrop-filter: blur(10px);
+          border-radius: 15px;
+          padding: 20px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .example-prompts h3 {
+          color: ${secondaryColor};
+          margin-bottom: 15px;
+          font-size: 1.2em;
+          font-weight: 600;
+        }
+        .example-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 15px;
+        }
+        .example-item {
+          background: rgba(255,255,255,0.8);
+          border: 1px solid #e9ecef;
+          border-radius: 8px;
+          padding: 15px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 14px;
+          color: ${secondaryColor};
+        }
+        .example-item:hover {
+          background: ${primaryColor}15;
+          border-color: ${primaryColor};
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .loading-examples {
+          text-align: center;
+          color: ${secondaryColor};
+          font-style: italic;
+          padding: 20px;
         }
         .status { 
           text-align: center; 
@@ -200,6 +325,57 @@ export function generateUI(config) {
         .json-collapsed .expand-icon {
           transform: rotate(-90deg);
         }
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.7);
+          backdrop-filter: blur(5px);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          z-index: 10000;
+        }
+        .modal-content {
+          background: white;
+          border-radius: 15px;
+          width: 90%;
+          max-width: 800px;
+          height: 80%;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-header {
+          background: ${primaryColor};
+          color: white;
+          padding: 20px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .modal-close {
+          background: none;
+          border: none;
+          color: white;
+          font-size: 24px;
+          cursor: pointer;
+          font-weight: bold;
+          padding: 5px 10px;
+          border-radius: 5px;
+          transition: background 0.2s ease;
+        }
+        .modal-close:hover {
+          background: rgba(255,255,255,0.2);
+        }
+        .modal-iframe {
+          flex: 1;
+          border: none;
+          width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -207,6 +383,18 @@ export function generateUI(config) {
         <span id="errorMessage"></span>
         <button class="close-btn" onclick="hideError()">&times;</button>
     </div>
+    ${config.app.logo || config.app.navigationLinks ? `
+    <nav class="navbar">
+        <div class="navbar-left">
+            ${config.app.logo ? `<img src="${config.app.logo}" alt="${config.app.name}" class="navbar-logo">` : ''}
+        </div>
+        <div class="navbar-right">
+            ${config.app.navigationLinks ? config.app.navigationLinks.map(link =>
+        `<a href="${link.url}" class="navbar-link" ${link.external !== false ? 'target="_blank" rel="noopener"' : ''}>${link.text}</a>`
+      ).join('') : ''}
+        </div>
+    </nav>
+    ` : ''}
     <div class="container">
         <div class="header">
             <h1>${config.app.name}</h1>
@@ -219,12 +407,40 @@ export function generateUI(config) {
             <input type="text" id="messageInput" placeholder="Type your message..." />
             <button id="sendButton" onclick="sendMessage()">Send</button>
         </div>
+        <div class="example-prompts">
+            <h3>Common Support Requests</h3>
+            <div id="exampleGrid" class="example-grid">
+                <div class="loading-examples">Loading example prompts...</div>
+            </div>
+        </div>
     </div>
 
     <script>
         const chat = document.getElementById('chat');
         const messageInput = document.getElementById('messageInput');
         const sendButton = document.getElementById('sendButton');
+        const exampleGrid = document.getElementById('exampleGrid');
+        
+        // Handle video background if provided
+        const backgroundImage = '${config.app.backgroundImage || ''}';
+        if (backgroundImage && (backgroundImage.endsWith('.mp4') || backgroundImage.endsWith('.webm') || backgroundImage.endsWith('.mov'))) {
+            const video = document.createElement('video');
+            video.src = backgroundImage;
+            video.autoplay = true;
+            video.loop = true;
+            video.muted = true;
+            video.style.position = 'fixed';
+            video.style.top = '0';
+            video.style.left = '0';
+            video.style.width = '100%';
+            video.style.height = '100%';
+            video.style.objectFit = 'cover';
+            video.style.zIndex = '-1';
+            document.body.appendChild(video);
+        }
+        
+        // Load example prompts on page load
+        loadExamplePrompts();
         
         function addMessage(text, type) {
             const div = document.createElement('div');
@@ -253,7 +469,6 @@ export function generateUI(config) {
                     const item = document.createElement('div');
                     item.className = 'result-item';
                     
-                    // Generic result rendering - works for any data structure
                     let content = '';
                     for (const [key, value] of Object.entries(result)) {
                         if (value && key !== 'id') {
@@ -270,7 +485,6 @@ export function generateUI(config) {
                     div.appendChild(item);
                 });
             } else {
-                // Generic data display
                 const item = document.createElement('div');
                 item.className = 'result-item';
                 
@@ -325,7 +539,6 @@ export function generateUI(config) {
             errorMessage.textContent = message;
             errorBanner.classList.add('show');
             
-            // Auto-hide after 10 seconds
             setTimeout(() => {
                 hideError();
             }, 10000);
@@ -334,6 +547,131 @@ export function generateUI(config) {
         function hideError() {
             const errorBanner = document.getElementById('errorBanner');
             errorBanner.classList.remove('show');
+        }
+        
+        function fillInput(text) {
+            messageInput.value = text;
+            messageInput.focus();
+        }
+        
+        // Browser action handlers
+        function executeBrowserAction(action, data) {
+            switch (action) {
+                case 'alert':
+                    window.alert(data.message);
+                    break;
+                case 'openWindow':
+                    window.open(data.url, '_blank', 'noopener,noreferrer');
+                    break;
+                case 'modal':
+                    showModal(data.url);
+                    break;
+                case 'speak':
+                    speakText(data.text);
+                    break;
+                default:
+                    console.warn('Unknown browser action:', action);
+            }
+        }
+        
+        function showModal(url) {
+            // Create modal overlay
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            
+            const modal = document.createElement('div');
+            modal.className = 'modal-content';
+            
+            const header = document.createElement('div');
+            header.className = 'modal-header';
+            header.innerHTML = \`
+                <h3>Content Viewer</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            \`;
+            
+            const iframe = document.createElement('iframe');
+            iframe.className = 'modal-iframe';
+            iframe.src = url;
+            iframe.sandbox = 'allow-same-origin allow-scripts allow-popups allow-forms';
+            
+            modal.appendChild(header);
+            modal.appendChild(iframe);
+            overlay.appendChild(modal);
+            
+            // Add click outside to close
+            overlay.onclick = (e) => {
+                if (e.target === overlay) closeModal();
+            };
+            
+            document.body.appendChild(overlay);
+            overlay.id = 'currentModal';
+        }
+        
+        function closeModal() {
+            const modal = document.getElementById('currentModal');
+            if (modal) {
+                document.body.removeChild(modal);
+            }
+        }
+        
+        function speakText(text) {
+            if ('speechSynthesis' in window) {
+                // Cancel any ongoing speech
+                window.speechSynthesis.cancel();
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 0.9;
+                utterance.pitch = 1;
+                utterance.volume = 0.8;
+                
+                // Try to use a natural voice
+                const voices = window.speechSynthesis.getVoices();
+                if (voices.length > 0) {
+                    // Prefer English voices
+                    const englishVoice = voices.find(voice => 
+                        voice.lang.startsWith('en') && voice.name.includes('Natural')
+                    ) || voices.find(voice => voice.lang.startsWith('en'));
+                    
+                    if (englishVoice) {
+                        utterance.voice = englishVoice;
+                    }
+                }
+                
+                window.speechSynthesis.speak(utterance);
+            } else {
+                console.warn('Speech synthesis not supported');
+                showError('Text-to-speech is not supported in your browser');
+            }
+        }
+        
+        async function loadExamplePrompts() {
+            try {
+                const response = await fetch('/examples', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    displayExamples(data.examples);
+                } else {
+                    throw new Error('Failed to load examples');
+                }
+            } catch (error) {
+                console.error('Failed to load example prompts:', error);
+                exampleGrid.innerHTML = '<div class="loading-examples">Unable to load example prompts</div>';
+            }
+        }
+        
+        function displayExamples(examples) {
+            exampleGrid.innerHTML = '';
+            examples.forEach(example => {
+                const item = document.createElement('div');
+                item.className = 'example-item';
+                item.textContent = example;
+                item.onclick = () => fillInput(example);
+                exampleGrid.appendChild(item);
+            });
         }
         
         async function sendMessage() {
@@ -386,6 +724,8 @@ export function generateUI(config) {
                                     addFunctionResults(data, 'search_results');
                                 } else if (data.type === 'function_result') {
                                     addRawData(data.data, 'Function Result');
+                                } else if (data.type === 'browser_action') {
+                                    executeBrowserAction(data.action, data.data);
                                 }
                             } catch (e) {
                                 console.error('Parse error:', e);
@@ -407,7 +747,6 @@ export function generateUI(config) {
             if (e.key === 'Enter') sendMessage();
         });
         
-        // Focus input on load
         messageInput.focus();
     </script>
 </body>
