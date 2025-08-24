@@ -6,14 +6,13 @@ Inspired by the Cortical Scanner Dr. Halsey used to create Cortana in the Halo s
 
 CorticalAI is a **monolithic, beginner-friendly framework** aimed at web developers who want to build custom AI agents without struggling with multiple moving parts. It combines:
 
-- **Server** (Express.js-based)  
-- **Dynamic Web UI** (chat interface included)  
-- **Orchestration layer** (function calling, prompt management)  
+- **Web Server Included** (Express.js-based, handles traffic to/from Ollama, serves front end, serves as headless API)  
+- **Dynamic Web UI** (turn-key chat interface included)  
+- **Orchestration layer** (LLM function calling, prompt management, all in one easy to configure location)  
 - **Browser Actions** (alerts, navigation, modals, speech)
 - **Background & Theming** (custom backgrounds, transparency, colors)
 - **Navigation System** (logo, menu links, branding)
 - **Auto-generated Examples** (contextual prompts from your LLM)
-- **MCP-ready** (Model Context Protocol) for LLM context handling  
 
 into a single, easy-to-understand package.  
 
@@ -28,7 +27,7 @@ Developers often struggle with starting AI projects because:
 - Streaming responses and integrating multiple APIs is messy  
 - Building interactive UIs with dynamic behavior takes significant time
 
-**CorticalAI solves this by combining everything**: UI, server, orchestration, browser control, and theming — so developers can focus on **what their AI does**, not how it's wired.
+**CorticalAI solves this by combining everything**: UI, server, orchestration, browser control, and theming — so developers can focus on **what their AI does**, not how it's wired. 
 
 ---
 

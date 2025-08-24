@@ -54,3 +54,5 @@ docker-compose.override.yml
 
 # Local development
 *.local
+
+forClaude.txt
