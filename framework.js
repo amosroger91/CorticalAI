@@ -39,7 +39,8 @@ export class LLMFramework {
                 chatOpacity: parseFloat(process.env.APP_CHAT_OPACITY) || 0.95,
                 logo: process.env.APP_LOGO || null,
                 navigationLinks: this.parseNavigationLinks(process.env.APP_NAVIGATION_LINKS),
-                browserActions: process.env.APP_BROWSER_ACTIONS !== 'false'
+                browserActions: process.env.APP_BROWSER_ACTIONS !== 'false',
+                darkMode: process.env.APP_UI_DARKMODE === 'true'
             },
             functionPattern: new RegExp(process.env.APP_FUNCTION_PATTERN || "^FUNCTION:(\\w+):(.+)$"),
             functions: {},
@@ -91,6 +92,9 @@ export class LLMFramework {
 
     setupMiddleware() {
         this.app.use(bodyParser.json());
+
+        this.app.use('/assets', express.static('assets'));
+        this.app.use('/static', express.static('.'));
 
         if (this.config.server.corsEnabled) {
             this.app.use((req, res, next) => {

@@ -311,12 +311,12 @@ CorticalAI works anywhere Node.js runs:
 
 ## Roadmap
 
-- [ ] Plugin system for third-party functions
-- [ ] Voice input integration  
-- [ ] Multi-language UI support
-- [ ] Enhanced analytics and logging
+- [ ] ChromaDB implementation for RAG
+- [ ] VOIP Integration  
+- [ ] React Frontend
+- [ ] Generalization of API for custom front end
 - [ ] WebSocket support for real-time updates
-- [ ] Mobile app wrapper
+- [ ] Mobile app wrapper (React Native)
 
 ---
 

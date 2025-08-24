@@ -2,16 +2,48 @@ export function generateUI(config) {
   // Ensure colors have # prefix and are valid hex colors
   const primaryColor = config.app.primaryColor?.startsWith('#') ? config.app.primaryColor : `#${config.app.primaryColor || '1DB954'}`;
   const secondaryColor = config.app.secondaryColor?.startsWith('#') ? config.app.secondaryColor : `#${config.app.secondaryColor || '191414'}`;
+  const darkMode = config.app.darkMode || false;
 
   // Handle background image/video - no overlay shader
   const backgroundStyle = config.app.backgroundImage
     ? `background-image: url('${config.app.backgroundImage}'); background-size: cover; background-position: center;`
-    : `background: linear-gradient(135deg, ${primaryColor}15, ${secondaryColor}15);`;
+    : darkMode
+      ? `background: linear-gradient(135deg, #1a1a1a, #2d2d2d);`
+      : `background: linear-gradient(135deg, ${primaryColor}15, ${secondaryColor}15);`;
 
   // Chat window transparency (0.0 to 1.0, default 0.95)
   const chatOpacity = config.app.chatOpacity || 0.95;
 
-  console.log('UI Colors - Primary:', primaryColor, 'Secondary:', secondaryColor); // Debug log
+  // Color scheme based on dark/light mode
+  const colors = darkMode ? {
+    containerBg: `rgba(40,40,40,${chatOpacity})`,
+    containerBorder: 'rgba(80,80,80,0.3)',
+    textPrimary: '#ffffff',
+    textSecondary: '#cccccc',
+    messageBg: '#4a4a4a',
+    messageBorder: 'rgba(80,80,80,0.3)',
+    inputBg: 'rgba(60,60,60,0.9)',
+    inputBorder: 'rgba(80,80,80,0.5)',
+    resultsBg: 'linear-gradient(135deg, #2a2a3a, #3a3a4a)',
+    resultItemBg: 'rgba(60,60,60,0.8)',
+    exampleItemBg: 'rgba(50,50,50,0.8)',
+    exampleItemHover: `${primaryColor}25`
+  } : {
+    containerBg: `rgba(255,255,255,${chatOpacity})`,
+    containerBorder: 'rgba(200,200,200,0.3)',
+    textPrimary: '#000000',
+    textSecondary: secondaryColor,
+    messageBg: '#f8f9fa',
+    messageBorder: '#e9ecef',
+    inputBg: 'rgba(255,255,255,0.9)',
+    inputBorder: '#e9ecef',
+    resultsBg: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
+    resultItemBg: 'white',
+    exampleItemBg: 'rgba(255,255,255,0.8)',
+    exampleItemHover: `${primaryColor}15`
+  };
+
+  console.log('UI Colors - Primary:', primaryColor, 'Secondary:', secondaryColor, 'Dark Mode:', darkMode);
 
   return `<!DOCTYPE html>
 <html>
@@ -61,7 +93,7 @@ export function generateUI(config) {
           left: 0;
           right: 0;
           height: 70px;
-          background: rgba(255,255,255,${chatOpacity});
+          background: ${colors.containerBg};
           backdrop-filter: blur(10px);
           display: flex;
           align-items: center;
@@ -69,6 +101,7 @@ export function generateUI(config) {
           padding: 0 20px;
           box-shadow: 0 2px 10px rgba(0,0,0,0.1);
           z-index: 1000;
+          border-bottom: 1px solid ${colors.containerBorder};
         }
         .navbar-left {
           display: flex;
@@ -86,7 +119,7 @@ export function generateUI(config) {
           gap: 20px;
         }
         .navbar-link {
-          color: ${secondaryColor};
+          color: ${colors.textSecondary};
           text-decoration: none;
           font-weight: 500;
           padding: 8px 16px;
@@ -94,18 +127,19 @@ export function generateUI(config) {
           transition: all 0.2s ease;
         }
         .navbar-link:hover {
-          background: ${primaryColor}15;
+          background: ${colors.exampleItemHover};
           color: ${primaryColor};
         }
         .container { max-width: 900px; margin: 0 auto; padding: 20px; }
         .header { 
           text-align: center; 
           margin-bottom: 30px; 
-          background: rgba(255,255,255,${chatOpacity});
+          background: ${colors.containerBg};
           backdrop-filter: blur(10px);
           padding: 30px;
           border-radius: 15px;
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+          border: 1px solid ${colors.containerBorder};
         }
         .header h1 { 
           color: ${primaryColor}; 
@@ -114,11 +148,11 @@ export function generateUI(config) {
           font-weight: 300;
         }
         .header p { 
-          color: ${secondaryColor}; 
+          color: ${colors.textSecondary}; 
           font-size: 1.2em;
         }
         .chat-container { 
-          background: rgba(255,255,255,${chatOpacity}); 
+          background: ${colors.containerBg}; 
           backdrop-filter: blur(10px);
           border-radius: 15px; 
           height: 500px; 
@@ -126,6 +160,7 @@ export function generateUI(config) {
           padding: 20px; 
           margin-bottom: 20px; 
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+          border: 1px solid ${colors.containerBorder};
         }
         .message { 
           margin: 15px 0; 
@@ -144,48 +179,56 @@ export function generateUI(config) {
           border-radius: 12px 12px 4px 12px;
         }
         .assistant { 
-          background: #f8f9fa; 
+          background: ${colors.messageBg}; 
           margin-right: 20%; 
-          border: 1px solid #e9ecef;
+          border: 1px solid ${colors.messageBorder};
           border-radius: 12px 12px 12px 4px;
+          color: ${colors.textPrimary};
         }
         .function-results { 
-          background: linear-gradient(135deg, #f0f9ff, #e0f2fe); 
+          background: ${colors.resultsBg}; 
           padding: 20px; 
           border-radius: 12px; 
           margin: 15px 0;
           border-left: 4px solid ${primaryColor};
+          color: ${colors.textPrimary};
         }
         .result-item { 
-          background: white; 
+          background: ${colors.resultItemBg}; 
           padding: 15px; 
           margin: 10px 0; 
           border-radius: 8px; 
           box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-          border-left: 3px solid ${primaryColor}; 
+          border-left: 3px solid ${primaryColor};
+          color: ${colors.textPrimary};
         }
         .input-container { 
           display: flex; 
           gap: 15px; 
-          background: rgba(255,255,255,${chatOpacity});
+          background: ${colors.containerBg};
           backdrop-filter: blur(10px);
           padding: 20px;
           border-radius: 15px;
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
           margin-bottom: 20px;
+          border: 1px solid ${colors.containerBorder};
         }
         .input-container input { 
           flex: 1; 
           padding: 15px 20px; 
-          border: 2px solid #e9ecef; 
+          border: 2px solid ${colors.inputBorder}; 
           border-radius: 25px; 
           font-size: 16px;
           transition: border-color 0.3s ease;
-          background: rgba(255,255,255,0.9);
+          background: ${colors.inputBg};
+          color: ${colors.textPrimary};
         }
         .input-container input:focus {
           outline: none;
           border-color: ${primaryColor};
+        }
+        .input-container input::placeholder {
+          color: ${darkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'};
         }
         .input-container button { 
           padding: 15px 30px; 
@@ -208,14 +251,15 @@ export function generateUI(config) {
           box-shadow: none;
         }
         .example-prompts {
-          background: rgba(255,255,255,${chatOpacity});
+          background: ${colors.containerBg};
           backdrop-filter: blur(10px);
           border-radius: 15px;
           padding: 20px;
           box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+          border: 1px solid ${colors.containerBorder};
         }
         .example-prompts h3 {
-          color: ${secondaryColor};
+          color: ${colors.textSecondary};
           margin-bottom: 15px;
           font-size: 1.2em;
           font-weight: 600;
@@ -226,24 +270,24 @@ export function generateUI(config) {
           gap: 15px;
         }
         .example-item {
-          background: rgba(255,255,255,0.8);
-          border: 1px solid #e9ecef;
+          background: ${colors.exampleItemBg};
+          border: 1px solid ${colors.containerBorder};
           border-radius: 8px;
           padding: 15px;
           cursor: pointer;
           transition: all 0.2s ease;
           font-size: 14px;
-          color: ${secondaryColor};
+          color: ${colors.textSecondary};
         }
         .example-item:hover {
-          background: ${primaryColor}15;
+          background: ${colors.exampleItemHover};
           border-color: ${primaryColor};
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
         .loading-examples {
           text-align: center;
-          color: ${secondaryColor};
+          color: ${colors.textSecondary};
           font-style: italic;
           padding: 20px;
         }
@@ -339,7 +383,7 @@ export function generateUI(config) {
           z-index: 10000;
         }
         .modal-content {
-          background: white;
+          background: ${darkMode ? '#2a2a2a' : 'white'};
           border-radius: 15px;
           width: 90%;
           max-width: 800px;
@@ -348,6 +392,7 @@ export function generateUI(config) {
           flex-direction: column;
           overflow: hidden;
           box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          border: 1px solid ${colors.containerBorder};
         }
         .modal-header {
           background: ${primaryColor};
