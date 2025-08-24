@@ -325,4 +325,6 @@ MIT
 
 ---
 
-**CorticalAI**: Make custom AI agents in minutes, not weeks. Streamline function calls, integrate APIs, control browsers, and build beautiful interfaces — all from one framework.
+> "May the favor of the Lord our God rest on us; establish the work of our hands for us— yes, establish the work of our hands."
+>
+> **Psalm 90:17**
