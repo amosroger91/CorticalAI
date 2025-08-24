@@ -105,6 +105,8 @@ OLLAMA_STREAM_TIMEOUT=1200000
 
 ## Quick Start Example
 
+![Alt text](./assets/example.png)
+
 ```javascript
 import { LLMFramework } from './framework.js';
 import dotenv from 'dotenv';
