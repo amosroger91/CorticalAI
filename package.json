@@ -1,15 +1,37 @@
 {
-  "name": "ollama-orchestrator",
-  "version": "1.0.0",
-  "description": "A standardized orchestration layer for ollama, making it easy to build LLM-based apps using any ollama supported model",
+  "name": "corticalai",
+  "version": "2.0.0",
+  "description": "CorticalAI combines everything you need to build powerful AI assistants",
   "main": "index.js",
   "type": "module",
-  "dependencies": {
-    "express": "^4.18.2",
-    "body-parser": "^1.20.2",
-    "node-fetch": "^3.3.2",
-    "dotenv": "^16.3.1"
+  "scripts": {
+    "test": "echo 'Tests not implemented yet'",
+    "example:duckduck": "cd examples/duckduck-go && npm run dev",
+    "start-chroma": "docker run -d --name chromadb -p 8000:8000 chromadb/chroma:latest || docker start chromadb",
+    "stop-chroma": "docker stop chromadb || true",
+    "remove-chroma": "docker rm chromadb --force || true",
+    "reset-chroma": "npm run stop-chroma && npm run remove-chroma",
+    "dev": "sudo npm run reset-chroma && concurrently \"sudo docker run -d --name chromadb -p 8000:8000 chromadb/chroma:latest || sudo docker start chromadb\" \"cd examples/duckduck-go && NODE_ENV=development node index.js\" \"cd frontend && sudo npm run dev\""
   },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-fetch": "^3.3.2",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "framework",
+    "assistant",
+    "functions"
+  ],
   "author": "Roger Amos",
   "license": "ISC"
 }

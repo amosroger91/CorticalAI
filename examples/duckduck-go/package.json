@@ -1,6 +1,6 @@
 {
   "name": "itunes-search-example",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "iTunes search example using ollama-orchestrator",
   "main": "index.js",
   "type": "module",

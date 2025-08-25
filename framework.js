@@ -1,19 +1,501 @@
 import express from "express";
 import bodyParser from "body-parser";
 import fetch from "node-fetch";
-import { generateUI } from "./ui.js";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
+import { exec } from "child_process";
+import { promisify } from "util";
+import os from "os";
+import swaggerJsdoc from "swagger-jsdoc";
+import swaggerUi from "swagger-ui-express";
 
-// =============================================================================
-// FRAMEWORK CORE - The reusable LLM orchestrator
-// =============================================================================
+const execAsync = promisify(exec);
 
+// Enhanced Function Registry with all function types
+class FunctionRegistry {
+    constructor(config) {
+        this.functions = new Map();
+        this.config = config;
+        this.registerBuiltInFunctions();
+    }
+
+    registerBuiltInFunctions() {
+        // Browser Functions
+        this.register('browser', 'showAlert', {
+            handler: async (message) => ({
+                success: true,
+                browserAction: 'alert',
+                data: { message }
+            }),
+            parseArgs: (raw) => raw.trim(),
+            description: 'Show an alert dialog in the browser'
+        });
+
+        this.register('browser', 'openWindow', {
+            handler: async (url) => ({
+                success: true,
+                browserAction: 'openWindow',
+                data: { url }
+            }),
+            parseArgs: (raw) => raw.trim(),
+            description: 'Open a URL in a new browser window'
+        });
+
+        this.register('browser', 'showModal', {
+            handler: async (url) => ({
+                success: true,
+                browserAction: 'modal',
+                data: { url }
+            }),
+            parseArgs: (raw) => raw.trim(),
+            description: 'Display a modal with embedded content'
+        });
+
+        this.register('browser', 'speak', {
+            handler: async (text) => ({
+                success: true,
+                browserAction: 'speak',
+                data: { text }
+            }),
+            parseArgs: (raw) => raw.trim(),
+            description: 'Use text-to-speech to speak text aloud'
+        });
+    }
+
+    register(type, name, definition) {
+        this.functions.set(name, { type, name, ...definition });
+        console.log(`Registered ${type} function: ${name}`);
+    }
+
+    // API Functions
+    registerAPI(name, config) {
+        this.register('api', name, {
+            handler: async (args) => {
+                try {
+                    const url = typeof config.endpoint === 'function'
+                        ? config.endpoint(args)
+                        : config.endpoint;
+
+                    const options = {
+                        method: config.method || 'GET',
+                        headers: {
+                            'User-Agent': 'CorticalAI/2.0',
+                            'Accept': 'application/json',
+                            ...config.headers
+                        },
+                        ...(config.body && { body: JSON.stringify(config.body(args)) })
+                    };
+
+                    const response = await fetch(url, options);
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    // Force JSON parsing regardless of content-type
+                    const text = await response.text();
+                    let data;
+                    try {
+                        data = JSON.parse(text);
+                    } catch (parseError) {
+                        console.warn('Non-JSON response received:', text.substring(0, 200));
+                        return { success: false, error: 'Invalid response format' };
+                    }
+
+                    return config.transform ? config.transform(data, args) : data;
+                } catch (error) {
+                    return { success: false, error: error.message };
+                }
+            },
+            parseArgs: config.parseArgs,
+            description: config.description
+        });
+    }
+
+    // Command Functions
+    registerCommand(name, config) {
+        this.register('command', name, {
+            handler: async (args) => {
+                try {
+                    if (!this.config.security?.allowCommands) {
+                        throw new Error('Command execution is disabled for security');
+                    }
+
+                    const command = typeof config.command === 'function'
+                        ? config.command(args)
+                        : config.command;
+
+                    // Security validation
+                    if (config.allowedCommands && !config.allowedCommands.some(cmd => command.startsWith(cmd))) {
+                        throw new Error(`Command not allowed: ${command}`);
+                    }
+
+                    const { stdout, stderr } = await execAsync(command, {
+                        timeout: config.timeout || 10000,
+                        maxBuffer: config.maxBuffer || 1024 * 1024
+                    });
+
+                    return {
+                        success: true,
+                        stdout: stdout.toString(),
+                        stderr: stderr.toString(),
+                        command: command
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.message,
+                        command: typeof config.command === 'function' ? 'dynamic' : config.command
+                    };
+                }
+            },
+            parseArgs: config.parseArgs,
+            description: config.description
+        });
+    }
+
+    // JavaScript/Node Functions
+    registerScript(name, config) {
+        this.register('script', name, {
+            handler: async (args) => {
+                try {
+                    if (!this.config.security?.allowScripts) {
+                        throw new Error('Script execution is disabled for security');
+                    }
+
+                    const result = await config.handler.call({
+                        args,
+                        console: console,
+                        setTimeout,
+                        Buffer
+                    }, args);
+
+                    return { success: true, result: result };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.message,
+                        stack: error.stack
+                    };
+                }
+            },
+            parseArgs: config.parseArgs,
+            description: config.description
+        });
+    }
+
+    // N8N Integration
+    registerN8N(name, config) {
+        this.register('n8n', name, {
+            handler: async (args) => {
+                try {
+                    const n8nEndpoint = config.endpoint || this.config.n8n?.endpoint;
+                    if (!n8nEndpoint) {
+                        throw new Error('N8N endpoint not configured');
+                    }
+
+                    const webhookUrl = `${n8nEndpoint}/webhook/${config.webhookId || name}`;
+
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(config.apiKey && { 'Authorization': `Bearer ${config.apiKey}` })
+                        },
+                        body: JSON.stringify({
+                            source: 'cortical-ai',
+                            timestamp: new Date().toISOString(),
+                            data: args
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`N8N workflow failed: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    return {
+                        success: true,
+                        workflow: config.webhookId || name,
+                        result: result
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        error: error.message,
+                        workflow: config.webhookId || name
+                    };
+                }
+            },
+            parseArgs: config.parseArgs,
+            description: config.description || `Execute N8N workflow: ${name}`
+        });
+    }
+
+    get(name) {
+        return this.functions.get(name);
+    }
+
+    getAll() {
+        return Array.from(this.functions.entries()).map(([name, def]) => ({
+            name,
+            type: def.type,
+            description: def.description
+        }));
+    }
+}
+
+// Authentication Manager
+class AuthenticationManager {
+    constructor(config) {
+        this.config = config;
+        this.jwtSecret = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
+        this.apiKeys = new Map();
+        this.sessions = new Map();
+        this.generateInitialApiKeys();
+    }
+
+    generateInitialApiKeys() {
+        if (!this.config.auth.apiKeys?.enabled) return;
+
+        const adminKey = this.generateApiKey('admin');
+        this.apiKeys.set(adminKey, {
+            name: 'Admin Key',
+            role: 'admin',
+            permissions: ['*'],
+            created: new Date()
+        });
+
+        const uiKey = this.generateApiKey('ui');
+        this.apiKeys.set(uiKey, {
+            name: 'UI Key',
+            role: 'ui',
+            permissions: ['chat', 'examples', 'functions'],
+            created: new Date()
+        });
+
+        console.log('🔑 API Keys generated - Admin:', adminKey, 'UI:', uiKey);
+    }
+
+    generateApiKey(prefix = 'cai') {
+        return `${prefix}_${crypto.randomBytes(32).toString('hex')}`;
+    }
+
+    authenticateRequest(req) {
+        // Check JWT token
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.substring(7);
+            try {
+                const decoded = jwt.verify(token, this.jwtSecret);
+                const session = this.sessions.get(decoded.sessionId);
+
+                if (session) {
+                    session.lastAccess = new Date();
+                    return { user: session.user, session: decoded };
+                }
+            } catch (error) {
+                console.warn('JWT verification failed:', error.message);
+            }
+        }
+
+        // Check API key
+        const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+        if (apiKey && this.apiKeys.has(apiKey)) {
+            const keyData = this.apiKeys.get(apiKey);
+            keyData.lastUsed = new Date();
+
+            return {
+                user: { id: 'api', role: keyData.role, name: keyData.name },
+                apiKey: keyData
+            };
+        }
+
+        return null;
+    }
+
+    requireAuth(permissions = []) {
+        return (req, res, next) => {
+            if (this.config.auth.mode === 'disabled') {
+                return next();
+            }
+
+            const auth = this.authenticateRequest(req);
+
+            if (!auth) {
+                return res.status(401).json({
+                    error: 'Authentication required'
+                });
+            }
+
+            req.auth = auth;
+            next();
+        };
+    }
+}
+
+// Context Enhancer for system info
+class ContextEnhancer {
+    constructor() {
+        this.systemInfo = {
+            platform: os.platform(),
+            arch: os.arch(),
+            nodeVersion: process.version,
+            hostname: os.hostname(),
+            memory: {
+                total: Math.round(os.totalmem() / 1024 / 1024 / 1024),
+                free: Math.round(os.freemem() / 1024 / 1024 / 1024)
+            }
+        };
+    }
+
+    enhanceRequestContext(req) {
+        const userAgent = req.headers['user-agent'] || '';
+        const ip = req.ip || 'unknown';
+
+        return {
+            timestamp: new Date().toISOString(),
+            request: {
+                ip: ip,
+                userAgent: userAgent,
+                browser: this.parseUserAgent(userAgent),
+                host: req.headers.host,
+                method: req.method,
+                path: req.path
+            },
+            system: this.systemInfo
+        };
+    }
+
+    parseUserAgent(userAgent) {
+        if (!userAgent) return { name: 'Unknown', version: 'Unknown', os: 'Unknown' };
+
+        let browser = 'Unknown';
+        let os = 'Unknown';
+
+        if (userAgent.includes('Chrome') && !userAgent.includes('Chromium')) {
+            browser = 'Chrome';
+        } else if (userAgent.includes('Firefox')) {
+            browser = 'Firefox';
+        } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+            browser = 'Safari';
+        }
+
+        if (userAgent.includes('Windows NT')) {
+            os = 'Windows';
+        } else if (userAgent.includes('Mac OS X')) {
+            os = 'macOS';
+        } else if (userAgent.includes('Linux')) {
+            os = 'Linux';
+        }
+
+        return { name: browser, os };
+    }
+
+    generateSystemPrompt(basePrompt, context, user = null) {
+        const currentTime = new Date().toLocaleString();
+
+        const contextualInfo = `
+SYSTEM CONTEXT (Current Session):
+- Time: ${currentTime}
+- User's Browser: ${context.request.browser.name} on ${context.request.browser.os}
+- Server: ${context.system.platform} ${context.system.arch}
+${user ? `- User: ${user.email} (${user.role})` : '- Anonymous Session'}
+
+FUNCTION CALLING RULES:
+- Use EXACTLY this format: FUNCTION:functionName:arguments  
+- For conversation: respond normally without function calls
+- Never mix conversation and function calls in the same response
+
+RESPONSE GUIDELINES:
+- Be contextually aware of the user's time when relevant
+- Provide actionable, specific assistance`;
+
+        return `${basePrompt}\n\n${contextualInfo}`;
+    }
+}
+
+// Main Framework Class
 export class LLMFramework {
     constructor(config) {
         this.config = this.mergeWithDefaults(config);
         this.app = express();
-        this.examplePrompts = []; // Cache for generated examples
+        this.functionRegistry = new FunctionRegistry(this.config);
+        this.contextEnhancer = new ContextEnhancer();
+        this.authManager = null;
+        this.examplePrompts = [];
+
         this.setupMiddleware();
         this.validateConfiguration();
+        this.initializeComponents();
+    }
+
+    initializeComponents() {
+        // Initialize authentication
+        if (this.config.auth?.enabled) {
+            this.authManager = new AuthenticationManager(this.config);
+        }
+
+        // Register user-defined functions
+        this.registerUserFunctions();
+
+        // Setup Swagger documentation
+        this.setupSwaggerDocs();
+    }
+
+    registerUserFunctions() {
+        const { functions = {} } = this.config;
+
+        Object.entries(functions).forEach(([name, definition]) => {
+            if (definition.type) {
+                switch (definition.type) {
+                    case 'api':
+                        this.functionRegistry.registerAPI(name, definition);
+                        break;
+                    case 'command':
+                        this.functionRegistry.registerCommand(name, definition);
+                        break;
+                    case 'script':
+                        this.functionRegistry.registerScript(name, definition);
+                        break;
+                    case 'n8n':
+                        this.functionRegistry.registerN8N(name, definition);
+                        break;
+                    default:
+                        console.warn(`Unknown function type: ${definition.type}`);
+                }
+            } else {
+                // Legacy function registration
+                this.functionRegistry.register('api', name, definition);
+            }
+        });
+    }
+
+    setupSwaggerDocs() {
+        const swaggerOptions = {
+            definition: {
+                openapi: '3.0.0',
+                info: {
+                    title: `${this.config.app.name} API`,
+                    version: '2.0.0',
+                    description: `API for ${this.config.app.description}`
+                },
+                servers: [
+                    {
+                        url: `http://${this.config.server.ip}:${this.config.server.port}`,
+                        description: 'Development server'
+                    }
+                ]
+            },
+            apis: []
+        };
+
+        const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+        this.app.use('/api/docs', swaggerUi.serve);
+        this.app.get('/api/docs', swaggerUi.setup(swaggerSpec));
+
+        console.log(`📚 API Documentation: http://${this.config.server.ip}:${this.config.server.port}/api/docs`);
     }
 
     mergeWithDefaults(config) {
@@ -38,44 +520,28 @@ export class LLMFramework {
                 backgroundImage: process.env.APP_BACKGROUND_IMAGE || null,
                 chatOpacity: parseFloat(process.env.APP_CHAT_OPACITY) || 0.95,
                 logo: process.env.APP_LOGO || null,
-                navigationLinks: this.parseNavigationLinks(process.env.APP_NAVIGATION_LINKS),
+                botAvatar: process.env.APP_BOT_AVATAR || null,  // Add this line
                 browserActions: process.env.APP_BROWSER_ACTIONS !== 'false',
                 darkMode: process.env.APP_UI_DARKMODE === 'true'
             },
             functionPattern: new RegExp(process.env.APP_FUNCTION_PATTERN || "^FUNCTION:(\\w+):(.+)$"),
             functions: {},
-            // Example generation settings
+            auth: {
+                enabled: process.env.AUTH_ENABLED === 'true',
+                mode: process.env.AUTH_MODE || 'disabled',
+                apiKeys: { enabled: true }
+            },
+            security: {
+                allowCommands: process.env.ALLOW_COMMANDS === 'true',
+                allowScripts: process.env.ALLOW_SCRIPTS === 'true'
+            },
             examples: {
                 enabled: process.env.APP_EXAMPLES_ENABLED !== 'false',
-                count: parseInt(process.env.APP_EXAMPLES_COUNT) || 6,
-                regenerateOnStart: process.env.APP_EXAMPLES_REGENERATE !== 'false'
+                count: parseInt(process.env.APP_EXAMPLES_COUNT) || 6
             }
         };
 
         return this.deepMerge(defaults, config);
-    }
-
-    parseNavigationLinks(envValue) {
-        if (!envValue) return null;
-
-        try {
-            // Expected format: "Home|/,About|/about,Contact|https://example.com|true"
-            // Format: text|url|external(optional, defaults to true for https://)
-            return envValue.split(',').map(link => {
-                const parts = link.trim().split('|');
-                if (parts.length < 2) return null;
-
-                const [text, url, external] = parts;
-                return {
-                    text: text.trim(),
-                    url: url.trim(),
-                    external: external !== undefined ? external === 'true' : url.startsWith('http')
-                };
-            }).filter(link => link !== null);
-        } catch (error) {
-            console.warn('Failed to parse navigation links:', error);
-            return null;
-        }
     }
 
     deepMerge(target, source) {
@@ -92,15 +558,13 @@ export class LLMFramework {
 
     setupMiddleware() {
         this.app.use(bodyParser.json());
-
-        this.app.use('/assets', express.static('assets'));
-        this.app.use('/static', express.static('.'));
+        this.app.set('trust proxy', true);
 
         if (this.config.server.corsEnabled) {
             this.app.use((req, res, next) => {
                 res.header('Access-Control-Allow-Origin', '*');
                 res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-                res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+                res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Key');
                 if (req.method === 'OPTIONS') {
                     res.sendStatus(200);
                 } else {
@@ -114,275 +578,56 @@ export class LLMFramework {
         const required = ['server', 'llm', 'app', 'systemPrompt'];
         for (const section of required) {
             if (!this.config[section]) {
-                throw new Error(`Missing required config section: ${section} `);
+                throw new Error(`Missing required config section: ${section}`);
             }
         }
-
-        // Validate functions
-        for (const [funcName, funcDef] of Object.entries(this.config.functions || {})) {
-            if (!funcDef.handler || typeof funcDef.handler !== 'function') {
-                throw new Error(`Function ${funcName} missing handler or handler is not a function`);
-            }
-            if (!funcDef.parseArgs || typeof funcDef.parseArgs !== 'function') {
-                throw new Error(`Function ${funcName} missing parseArgs method`);
-            }
-        }
-
-        // Auto-register browser functions if enabled
-        if (this.config.app.browserActions) {
-            this.registerBrowserFunctions();
-        }
-
         console.log('✅ Configuration validated successfully');
     }
 
-    registerBrowserFunctions() {
-        const browserFunctions = {
-            showAlert: {
-                handler: async (message) => {
-                    return {
-                        success: true,
-                        browserAction: 'alert',
-                        data: { message }
-                    };
-                },
-                parseArgs: (rawArgs) => rawArgs.trim()
-            },
-            openWindow: {
-                handler: async (url) => {
-                    return {
-                        success: true,
-                        browserAction: 'openWindow',
-                        data: { url }
-                    };
-                },
-                parseArgs: (rawArgs) => rawArgs.trim()
-            },
-            showModal: {
-                handler: async (url) => {
-                    return {
-                        success: true,
-                        browserAction: 'modal',
-                        data: { url }
-                    };
-                },
-                parseArgs: (rawArgs) => rawArgs.trim()
-            },
-            speak: {
-                handler: async (text) => {
-                    return {
-                        success: true,
-                        browserAction: 'speak',
-                        data: { text }
-                    };
-                },
-                parseArgs: (rawArgs) => rawArgs.trim()
-            }
-        };
-
-        // Merge browser functions with user-defined functions
-        this.config.functions = { ...this.config.functions, ...browserFunctions };
-        console.log(`🌐 Registered ${Object.keys(browserFunctions).length} browser functions`);
-    }
-
-    getBrowserActionConfirmation(action, data) {
-        switch (action) {
-            case 'alert':
-                return `Alert displayed: "${data.message}"`;
-            case 'openWindow':
-                return `Opening new tab: ${data.url}`;
-            case 'modal':
-                return `Opening modal with: ${data.url}`;
-            case 'speak':
-                return `Speaking: "${data.text}"`;
-            default:
-                return `Browser action completed: ${action}`;
-        }
-    }
-
-    // Generate example prompts using the LLM
-    async generateExamplePrompts() {
-        if (!this.config.examples.enabled) {
-            return ['Hello', 'What can you help me with?'];
-        }
-
-        try {
-            const functionNames = Object.keys(this.config.functions);
-            const hasFunction = functionNames.length > 0;
-
-            let examplePrompt = `You are ${this.config.app.name}. ${this.config.app.description}
-
-Based on your capabilities, generate ${this.config.examples.count} example questions or requests that users might ask you. 
-
-${hasFunction ? `You have these functions available: ${functionNames.join(', ')}` : 'You are a conversational assistant.'}
-
-Return ONLY a JSON array of strings, no other text. Each string should be a realistic user question or request that you can handle well.
-
-Example format: ["Question 1", "Question 2", "Question 3"]
-
-Generate varied examples that show different aspects of what you can do:`;
-
-            console.log('🔄 Generating example prompts...');
-
-            const response = await fetch(this.config.llm.endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    model: this.config.llm.model,
-                    prompt: examplePrompt,
-                    stream: false
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`LLM API error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            const responseText = data.response.trim();
-
-            console.log('🤖 Raw LLM response for examples:', responseText);
-
-            // Try to extract JSON from the response
-            let examples;
-            try {
-                // Look for JSON array in the response
-                const jsonMatch = responseText.match(/\[(.*?)\]/s);
-                if (jsonMatch) {
-                    examples = JSON.parse(jsonMatch[0]);
-                } else {
-                    // Try parsing the whole response as JSON
-                    examples = JSON.parse(responseText);
-                }
-            } catch (parseError) {
-                console.warn('⚠️ Failed to parse LLM response as JSON, using fallback examples');
-                examples = this.getFallbackExamples();
-            }
-
-            // Validate and clean examples
-            if (Array.isArray(examples) && examples.length > 0) {
-                this.examplePrompts = examples
-                    .filter(ex => typeof ex === 'string' && ex.trim().length > 0)
-                    .map(ex => ex.trim())
-                    .slice(0, this.config.examples.count);
-
-                console.log('✅ Generated examples:', this.examplePrompts);
-                return this.examplePrompts;
-            } else {
-                throw new Error('Invalid examples format from LLM');
-            }
-
-        } catch (error) {
-            console.error('❌ Failed to generate examples:', error);
-            this.examplePrompts = this.getFallbackExamples();
-            return this.examplePrompts;
-        }
-    }
-
-    getFallbackExamples() {
-        const functionNames = Object.keys(this.config.functions);
-
-        if (functionNames.length > 0) {
-            return [
-                'Hello, what can you help me with?',
-                `Can you use your ${functionNames[0]} function?`,
-                'Tell me about your capabilities',
-                'What functions do you have available?',
-                'Help me get started',
-                'Show me what you can do'
-            ];
-        } else {
-            return [
-                'Hello, how are you?',
-                'What can you help me with today?',
-                'Tell me something interesting',
-                'How can I get started?',
-                'What are your capabilities?',
-                'Can you assist me with questions?'
-            ];
-        }
-    }
-
     detectFunctionCall(text) {
-        if (!text) return null;
-
-        const trimmedText = text.trim();
-        console.log('=== FUNCTION DETECTION DEBUG ===');
-        console.log('Text to check:', JSON.stringify(trimmedText));
-        console.log('Pattern:', this.config.functionPattern);
-
-        const match = trimmedText.match(this.config.functionPattern);
-        console.log('Match result:', match);
-
+        const match = text.trim().match(this.config.functionPattern);
         if (match) {
-            const [fullMatch, funcName, rawArgs] = match;
-            console.log('Function call found:', funcName, 'with args:', rawArgs);
-
-            if (this.config.functions[funcName]) {
+            const [_, funcName, rawArgs] = match;
+            const func = this.functionRegistry.get(funcName);
+            if (func) {
                 try {
-                    const args = this.config.functions[funcName].parseArgs(rawArgs);
+                    const args = func.parseArgs(rawArgs);
                     return { function: funcName, args };
                 } catch (error) {
-                    console.error(`Error parsing args for ${funcName}: `, error);
-                    return null;
+                    console.error(`Error parsing args for ${funcName}:`, error);
                 }
-            } else {
-                console.error(`Function ${funcName} not found in config`);
             }
-        } else {
-            console.log('NO MATCH FOUND');
         }
-
         return null;
     }
 
-    async executeFunction(funcName, args) {
-        const funcDef = this.config.functions[funcName];
-        if (!funcDef) {
-            throw new Error(`Function ${funcName} not found`);
-        }
-
-        if (funcDef.validation) {
-            this.validateFunctionArgs(funcName, args, funcDef.validation);
-        }
-
-        return await funcDef.handler(args);
+    getBrowserActionConfirmation(action, data) {
+        const confirmations = {
+            alert: `Alert displayed: "${data.message}"`,
+            openWindow: `Opening new tab: ${data.url}`,
+            modal: `Opening modal with: ${data.url}`,
+            speak: `Speaking: "${data.text}"`
+        };
+        return confirmations[action] || `Browser action completed: ${action}`;
     }
 
-    validateFunctionArgs(funcName, args, validation) {
-        if (validation.required) {
-            for (const required of validation.required) {
-                if (args[required] === undefined || args[required] === null) {
-                    throw new Error(`Function ${funcName} missing required parameter: ${required} `);
-                }
-            }
+    async streamLLMResponse(prompt, res) {
+        const response = await fetch(this.config.llm.endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                model: this.config.llm.model,
+                prompt: prompt,
+                stream: true
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`LLM API error: ${response.status}`);
         }
 
-        if (validation.types) {
-            for (const [param, expectedType] of Object.entries(validation.types)) {
-                if (args[param] !== undefined && typeof args[param] !== expectedType) {
-                    throw new Error(`Function ${funcName} parameter ${param} should be ${expectedType}, got ${typeof args[param]} `);
-                }
-            }
-        }
-    }
-
-    async processOllamaStream(response, res) {
         return new Promise((resolve, reject) => {
             let buffer = "";
-
-            const timeout = setTimeout(() => {
-                console.log('Stream timeout');
-                if (!res.writableEnded) {
-                    res.write(`data: ${JSON.stringify({
-                        type: "error",
-                        error: "Response timeout"
-                    })
-                        } \n\n`);
-                    res.end();
-                }
-                reject(new Error('Timeout'));
-            }, this.config.llm.streamTimeout);
 
             response.body.on('data', (chunk) => {
                 buffer += chunk.toString();
@@ -397,12 +642,10 @@ Generate varied examples that show different aspects of what you can do:`;
                                 res.write(`data: ${JSON.stringify({
                                     type: "token",
                                     text: parsed.response
-                                })
-                                    } \n\n`);
+                                })}\n\n`);
                             }
                             if (parsed.done) {
-                                clearTimeout(timeout);
-                                res.write(`data: ${JSON.stringify({ type: "done" })} \n\n`);
+                                res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
                                 res.end();
                                 resolve();
                                 return;
@@ -415,238 +658,245 @@ Generate varied examples that show different aspects of what you can do:`;
             });
 
             response.body.on('end', () => {
-                clearTimeout(timeout);
                 if (!res.writableEnded) {
-                    res.write(`data: ${JSON.stringify({ type: "done" })} \n\n`);
+                    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
                     res.end();
                 }
                 resolve();
             });
 
-            response.body.on('error', (error) => {
-                clearTimeout(timeout);
-                console.error('Stream error:', error);
-                if (!res.writableEnded) {
-                    res.write(`data: ${JSON.stringify({
-                        type: "error",
-                        error: error.message
-                    })
-                        } \n\n`);
-                    res.end();
-                }
-                reject(error);
-            });
+            response.body.on('error', reject);
         });
     }
 
     setupRoutes() {
-        this.app.post("/stream", async (req, res) => {
-            const { message, conversationHistory = [] } = req.body;
-            console.log("Request:", message);
+        // Enhanced chat endpoint with context
+        this.app.post("/api/v1/chat/stream",
+            this.authManager?.requireAuth(['chat']) || ((req, res, next) => next()),
+            async (req, res) => {
+                const { message } = req.body;
+                const context = this.contextEnhancer.enhanceRequestContext(req);
 
-            res.writeHead(200, {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive"
-            });
-
-            req.setTimeout(this.config.llm.streamTimeout);
-            res.setTimeout(this.config.llm.streamTimeout);
-
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), this.config.llm.timeout);
-
-                const initialResponse = await fetch(this.config.llm.endpoint, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        model: this.config.llm.model,
-                        prompt: `${this.config.systemPrompt}
-
-User says: "${message}"
-
-Assistant responds: `,
-                        stream: false
-                    }),
-                    signal: controller.signal
+                res.writeHead(200, {
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive"
                 });
 
-                clearTimeout(timeoutId);
+                try {
+                    // Enhanced system prompt with context
+                    const systemPrompt = this.contextEnhancer.generateSystemPrompt(
+                        this.config.systemPrompt,
+                        context,
+                        req.auth?.user
+                    );
 
-                if (!initialResponse.ok) {
-                    throw new Error(`LLM API error: ${initialResponse.status} `);
-                }
+                    const fullPrompt = `${systemPrompt}\n\nUser says: "${message}"\n\nAssistant responds: `;
 
-                const initialData = await initialResponse.json();
-                const responseText = initialData.response;
+                    // Check for function calls first
+                    const functionCall = this.detectFunctionCall(message);
 
-                console.log("LLM response:", responseText);
+                    if (functionCall) {
+                        res.write(`data: ${JSON.stringify({
+                            type: "status",
+                            text: "Processing your request..."
+                        })}\n\n`);
 
-                const functionCall = this.detectFunctionCall(responseText);
+                        try {
+                            const func = this.functionRegistry.get(functionCall.function);
+                            if (!func) {
+                                throw new Error(`Function ${functionCall.function} not found`);
+                            }
 
-                if (functionCall) {
-                    console.log("Function call detected:", functionCall);
+                            const result = await func.handler(functionCall.args);
 
-                    res.write(`data: ${JSON.stringify({
-                        type: "status",
-                        text: "Processing your request..."
-                    })
-                        } \n\n`);
+                            // Handle different result types
+                            if (result.success && result.browserAction) {
+                                res.write(`data: ${JSON.stringify({
+                                    type: "browser_action",
+                                    action: result.browserAction,
+                                    data: result.data
+                                })}\n\n`);
 
-                    try {
-                        const result = await this.executeFunction(functionCall.function, functionCall.args);
-                        console.log('Function result:', result);
+                                res.write(`data: ${JSON.stringify({
+                                    type: "token",
+                                    text: this.getBrowserActionConfirmation(result.browserAction, result.data)
+                                })}\n\n`);
+                            } else if (result.results || result.success) {
+                                res.write(`data: ${JSON.stringify({
+                                    type: "function_result",
+                                    data: result
+                                })}\n\n`);
+                            }
 
-                        // Handle different result types
-                        if (result.success && result.browserAction) {
-                            // Send browser action to frontend
-                            res.write(`data: ${JSON.stringify({
-                                type: "browser_action",
-                                action: result.browserAction,
-                                data: result.data
-                            })} \n\n`);
-
-                            // Send confirmation message
-                            res.write(`data: ${JSON.stringify({
-                                type: "token",
-                                text: this.getBrowserActionConfirmation(result.browserAction, result.data)
-                            })} \n\n`);
-
-                            res.write(`data: ${JSON.stringify({ type: "done" })} \n\n`);
+                            res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
                             res.end();
-                            return;
-                        } else if (result.success && result.results) {
-                            res.write(`data: ${JSON.stringify({
-                                type: "search_results",
-                                results: result.results,
-                                totalResults: result.totalResults
-                            })
-                                } \n\n`);
-                        } else if (result.success && result.data) {
-                            res.write(`data: ${JSON.stringify({
-                                type: "function_result",
-                                data: result.data
-                            })
-                                } \n\n`);
-                        } else if (!result.success) {
-                            // Handle failed function calls
+
+                        } catch (error) {
                             res.write(`data: ${JSON.stringify({
                                 type: "error",
-                                error: result.message || result.error || "Function execution failed"
-                            })
-                                } \n\n`);
+                                error: error.message
+                            })}\n\n`);
                             res.end();
-                            return;
                         }
-
-                        // Get AI interpretation of results
-                        let analysisPrompt;
-                        if (result.success && result.results) {
-                            const topResults = result.results.slice(0, 3);
-                            analysisPrompt = `User searched for: "${message}"
-
-Found ${result.totalResults} results! Top matches:
-${topResults.map(r => `- "${r.name}" by ${r.artist}`).join('\n')}
-
-Write a brief, helpful response about these search results.`;
-                        } else {
-                            analysisPrompt = `User searched for: "${message}" but no results were found.Suggest trying different keywords.`;
-                        }
-
-                        const analysisResponse = await fetch(this.config.llm.endpoint, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                model: this.config.llm.model,
-                                prompt: analysisPrompt,
-                                stream: true
-                            })
-                        });
-
-                        if (analysisResponse.ok) {
-                            await this.processOllamaStream(analysisResponse, res);
-                        } else {
-                            throw new Error(`Analysis failed: ${analysisResponse.status} `);
-                        }
-
-                    } catch (error) {
-                        console.error('Function error:', error);
-                        res.write(`data: ${JSON.stringify({
-                            type: "error",
-                            error: `Function failed: ${error.message}`
-                        })
-                            } \n\n`);
-                        res.end();
-                    }
-
-                } else {
-                    // No function call detected, stream normal response
-                    const streamResponse = await fetch(this.config.llm.endpoint, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            model: this.config.llm.model,
-                            prompt: `${this.config.systemPrompt}
-
-User says: ${message}
-
-Assistant responds: `,
-                            stream: true
-                        })
-                    });
-
-                    if (streamResponse.ok) {
-                        await this.processOllamaStream(streamResponse, res);
                     } else {
-                        throw new Error(`Stream failed: ${streamResponse.status} `);
+                        // Regular conversation - stream LLM response
+                        await this.streamLLMResponse(fullPrompt, res);
                     }
-                }
 
-            } catch (error) {
-                console.error("Stream error:", error);
-                if (!res.writableEnded) {
+                } catch (error) {
+                    console.error("Chat error:", error);
                     res.write(`data: ${JSON.stringify({
                         type: "error",
-                        error: error.name === 'AbortError' ? 'Request timeout' : error.message
-                    })
-                        } \n\n`);
+                        error: error.message
+                    })}\n\n`);
                     res.end();
                 }
             }
-        });
+        );
 
-        // Examples endpoint
-        this.app.get("/examples", async (req, res) => {
-            try {
-                if (this.examplePrompts.length === 0 || this.config.examples.regenerateOnStart) {
-                    await this.generateExamplePrompts();
-                }
+        //config endpoint
+        this.app.get("/api/v1/config",
+            this.authManager?.requireAuth(['config']) || ((req, res, next) => next()),
+            (req, res) => {
+                const publicConfig = {
+                    app: {
+                        name: this.config.app.name,
+                        description: this.config.app.description,
+                        primaryColor: this.config.app.primaryColor,
+                        secondaryColor: this.config.app.secondaryColor,
+                        backgroundImage: this.config.app.backgroundImage,
+                        chatOpacity: this.config.app.chatOpacity,
+                        logo: this.config.app.logo,
+                        botAvatar: this.config.app.botAvatar,  // Add this line
+                        darkMode: this.config.app.darkMode
+                    },
+                    functions: this.functionRegistry.getAll().length,
+                    auth: {
+                        enabled: this.config.auth?.enabled || false
+                    }
+                };
 
                 res.json({
                     success: true,
-                    examples: this.examplePrompts
+                    config: publicConfig
                 });
+            }
+        );
+
+        // Functions endpoint
+        this.app.get("/api/v1/functions",
+            this.authManager?.requireAuth(['functions']) || ((req, res, next) => next()),
+            (req, res) => {
+                const functions = this.functionRegistry.getAll();
+                res.json({ functions, total: functions.length });
+            }
+        );
+
+        // Examples endpoint (existing logic)
+        this.app.get("/examples", async (req, res) => {
+            try {
+                if (this.examplePrompts.length === 0) {
+                    this.examplePrompts = [
+                        'Hello, what can you help me with?',
+                        'Tell me about your capabilities',
+                        'What functions do you have available?',
+                        'Help me get started'
+                    ];
+                }
+                res.json({ success: true, examples: this.examplePrompts });
             } catch (error) {
-                console.error('Failed to get examples:', error);
-                res.json({
-                    success: false,
-                    examples: this.getFallbackExamples()
-                });
+                res.json({ success: false, examples: this.examplePrompts });
             }
         });
 
-        this.app.get("/", (req, res) => {
-            res.send(generateUI(this.config));
-        });
+        // React frontend endpoint (serve static build or development proxy)
+        if (process.env.DISABLE_DEFAULT_UI !== 'true') {
+            // In development, you'd typically proxy to React dev server on port 3000
+            // In production, serve the built React app from build/dist folder
 
-        // Health check endpoint
-        this.app.get("/health", (req, res) => {
+            if (process.env.NODE_ENV === 'production') {
+                // Serve static React build files
+                this.app.use(express.static('build'));
+
+                this.app.get("*", (req, res) => {
+                    const context = this.contextEnhancer.enhanceRequestContext(req);
+                    const apiKey = this.authManager?.apiKeys ?
+                        Array.from(this.authManager.apiKeys.keys())
+                            .find(key => this.authManager.apiKeys.get(key).role === 'ui') :
+                        null;
+
+                    // Inject config into React app via window object
+                    const configScript = `
+                        <script>
+                            window.CORTICAL_CONFIG = ${JSON.stringify({
+                        apiUrl: `http://${this.config.server.ip}:${this.config.server.port}`,
+                        apiKey: apiKey,
+                        app: this.config.app,
+                        auth: { enabled: this.config.auth?.enabled },
+                        features: {
+                            functions: this.functionRegistry.getAll().length,
+                            auth: !!this.authManager
+                        }
+                    })};
+                        </script>
+                    `;
+
+                    // Read and modify the React build index.html
+                    const fs = require('fs');
+                    const path = require('path');
+                    const indexPath = path.join(process.cwd(), 'build', 'index.html');
+
+                    if (fs.existsSync(indexPath)) {
+                        let html = fs.readFileSync(indexPath, 'utf8');
+                        // Inject config before closing head tag
+                        html = html.replace('</head>', `${configScript}</head>`);
+                        res.send(html);
+                    } else {
+                        res.status(404).json({
+                            error: 'React build not found. Run `npm run build` first.'
+                        });
+                    }
+                });
+            } else {
+                // Development mode - provide API info and React dev server instructions
+                this.app.get("/", (req, res) => {
+                    const context = this.contextEnhancer.enhanceRequestContext(req);
+                    const apiKey = this.authManager?.apiKeys ?
+                        Array.from(this.authManager.apiKeys.keys())
+                            .find(key => this.authManager.apiKeys.get(key).role === 'ui') :
+                        null;
+
+                    res.json({
+                        message: "CorticalAI v2.0 API Server",
+                        development: true,
+                        react_frontend: "Start React dev server separately on port 3000",
+                        api_docs: `http://${this.config.server.ip}:${this.config.server.port}/api/docs`,
+                        health: `http://${this.config.server.ip}:${this.config.server.port}/api/v1/health`,
+                        config: {
+                            apiUrl: `http://${this.config.server.ip}:${this.config.server.port}`,
+                            apiKey: apiKey,
+                            app: this.config.app
+                        },
+                        context: context
+                    });
+                });
+            }
+        }
+
+        // Enhanced health endpoint
+        this.app.get("/api/v1/health", (req, res) => {
+            const context = this.contextEnhancer.enhanceRequestContext(req);
             res.json({
                 status: "ok",
                 app: this.config.app.name,
-                functions: Object.keys(this.config.functions).length,
-                examples: this.examplePrompts.length,
+                version: "2.0.0",
+                features: {
+                    functions: this.functionRegistry.getAll().length,
+                    auth: !!this.authManager,
+                    ui: process.env.DISABLE_DEFAULT_UI !== 'true'
+                },
+                system: context.system,
                 timestamp: new Date().toISOString()
             });
         });
@@ -655,24 +905,20 @@ Assistant responds: `,
     async start() {
         this.setupRoutes();
 
-        // Generate examples on startup if enabled
-        if (this.config.examples.enabled) {
-            this.generateExamplePrompts().catch(console.error);
-        }
-
         this.app.listen(this.config.server.port, this.config.server.ip, () => {
             console.log(`
-╔════════════════════════════════════════════════════════════════╗
-║   ${this.config.app.name.padEnd(58)} ║
-╠════════════════════════════════════════════════════════════════╣
-║  🚀 Server: http://${this.config.server.ip}:${this.config.server.port}                               ║
-║  🤖 Model: ${this.config.llm.model.padEnd(49)} ║
-║  ⚡ Functions: ${Object.keys(this.config.functions).length.toString().padEnd(44)} ║
-║  💡 Examples: ${this.config.examples.enabled ? 'Enabled' : 'Disabled'}                                     ║
-║  🌐 Browser Actions: ${this.config.app.browserActions ? 'Enabled' : 'Disabled'}                            ║
-║  ✅ Status: Ready                                              ║
-╚════════════════════════════════════════════════════════════════╝
-        `);
+╔══════════════════════════════════════════════════════════════════════════════════════════╗
+║   🧠 CorticalAI v2.0 - Enhanced Framework                                                 ║
+╠══════════════════════════════════════════════════════════════════════════════════════════╣
+║  🚀 Server: http://${this.config.server.ip}:${this.config.server.port}                                               ║
+║  🤖 Model: ${this.config.llm.model.padEnd(60)} ║
+║  ⚡ Functions: ${this.functionRegistry.getAll().length.toString().padStart(2)} registered                                           ║
+║  🔐 Auth: ${(this.authManager ? 'Enabled' : 'Disabled').padEnd(10)}                                                ║
+║  📚 Docs: http://${this.config.server.ip}:${this.config.server.port}/api/docs                               ║
+║  🌐 UI: ${process.env.DISABLE_DEFAULT_UI === 'true' ? 'Disabled' : 'Enabled'}                                                    ║
+║  ✅ Status: Ready                                                                       ║
+╚══════════════════════════════════════════════════════════════════════════════════════════╝
+            `);
         });
     }
 }

@@ -1,63 +1,47 @@
-# CorticalAI – Build Custom AI Agents in Minutes
+# CorticalAI v2.0 — Production-Ready AI Agent Framework
 
-![Alt text](./assets/logo.png)
+![CorticalAI Logo](./assets/logo.png)
 
-Inspired by the Cortical Scanner Dr. Halsey used to create Cortana in the Halo series, CorticalAI lets you spin up fully functional AI agents in minutes, not hours. Build assistants that can think, interact, call APIs, and control the browser seamlessly—giving you the power to automate tasks and experiment with AI faster than ever.
+Inspired by the Cortical Scanner Dr. Halsey used to create Cortana in the Halo series, CorticalAI v2.0 is a production-ready framework for building sophisticated AI agents with multiple function types, authentication, and comprehensive API documentation.
 
-CorticalAI is a **monolithic, beginner-friendly framework** aimed at web developers who want to build custom AI agents without struggling with multiple moving parts. It combines:
+CorticalAI combines everything you need to build powerful AI assistants:
 
-- **Web Server Included** (Express.js-based, handles traffic to/from Ollama, serves front end, serves as headless API)  
-- **Dynamic Web UI** (turn-key chat interface included)  
-- **Orchestration layer** (LLM function calling, prompt management, all in one easy to configure location)  
-- **Browser Actions** (alerts, navigation, modals, speech)
-- **Background & Theming** (custom backgrounds, transparency, colors)
-- **Navigation System** (logo, menu links, branding)
-- **Auto-generated Examples** (contextual prompts from your LLM)
+- **Enhanced Function System** (API calls, system commands, JavaScript execution, N8N workflows, browser actions)
+- **Multi-Provider Authentication** (Google OAuth, Azure/Microsoft 365, local auth)
+- **Auto-Generated API Documentation** (Swagger/OpenAPI integration)
+- **Context-Aware System Prompts** (user browser, location, time awareness)
+- **Security Controls** (command sandboxing, permission systems)
+- **Web Server & Dynamic UI** (Express.js backend with customizable frontend)
 
-into a single, easy-to-understand package.  
-
----
-
-## Why This Exists
-
-Developers often struggle with starting AI projects because:
-
-- LLM orchestration involves separate server, client, and function management layers  
-- Function-calling models (like Gemma) require boilerplate for API handling and parsing  
-- Streaming responses and integrating multiple APIs is messy  
-- Building interactive UIs with dynamic behavior takes significant time
-
-**CorticalAI solves this by combining everything**: UI, server, orchestration, browser control, and theming — so developers can focus on **what their AI does**, not how it's wired. 
+into a single, production-ready package.
 
 ---
 
-## Features
+## What's New in v2.0
 
-### Core Framework
-- **Plug-and-play LLM support** – works with any function-calling capable model (e.g., Gemma)  
-- **Dynamic chat UI** – real-time streaming of responses with modern design
-- **Function calling support** – define API handlers with argument parsing  
-- **Extensible configuration** – all defaults can be overridden via `config` or `.env`  
-- **Streaming and non-streaming modes** – handles both synchronous and async responses gracefully  
-- **Health check endpoint** – `/health` with system status
-- **Error handling and timeouts** – built-in for robust API calls  
+### Enhanced Function Types
+- **API Functions**: HTTP requests with automatic JSON parsing and error handling
+- **Command Functions**: Secure system command execution with whitelisting
+- **Script Functions**: JavaScript code execution in sandboxed environment  
+- **N8N Functions**: Direct workflow integration with n8n automation platform
+- **Browser Functions**: Client-side actions (alerts, navigation, speech)
 
-### Browser Actions
-- **JavaScript Alerts** – `FUNCTION:showAlert:Your message here`
-- **Window Navigation** – `FUNCTION:openWindow:https://example.com`  
-- **Modal Popups** – `FUNCTION:showModal:https://widget.example.com`
-- **Text-to-Speech** – `FUNCTION:speak:Hello, welcome to our site!`
+### Security & Authentication
+- **Multi-provider OAuth**: Google, Azure/Microsoft 365 integration
+- **API Key Management**: Automatic generation with role-based permissions
+- **JWT Token System**: Secure session management with refresh tokens
+- **Command Sandboxing**: Whitelist-based command execution controls
 
-### Visual Customization
-- **Custom Backgrounds** – images or videos with configurable transparency
-- **Color Theming** – primary/secondary colors throughout the interface
-- **Logo & Navigation** – brand logo and navigation menu with internal/external links
-- **Responsive Design** – works on desktop and mobile
+### Enhanced Context Awareness
+- **User Environment Detection**: Browser, OS, location, timezone
+- **Dynamic System Prompts**: Contextual information injection
+- **Request Metadata**: IP, user agent, timestamp tracking
 
-### Smart Features
-- **Auto-generated Examples** – your LLM creates contextual example prompts
-- **Function Documentation** – automatically explains available functions to users
-- **Dynamic UI Updates** – real-time result display for any function type
+### Developer Experience
+- **Auto-Generated Docs**: Swagger UI at `/api/docs`
+- **Function Documentation**: Automatic endpoint discovery
+- **Enhanced Error Handling**: Comprehensive logging and debugging
+- **Production Security**: HTTPS support, CORS configuration
 
 ---
 
@@ -69,7 +53,9 @@ cd CorticalAI
 npm install
 ```
 
-Create a `.env` file with your configuration:
+### Environment Configuration
+
+Create a `.env` file:
 
 ```env
 # Server Configuration
@@ -77,34 +63,119 @@ SERVER_PORT=3001
 SERVER_IP=localhost
 SERVER_ENABLE_CORS=true
 
-# App Branding & UI
-APP_NAME=My AI Assistant
-APP_DESCRIPTION=Custom AI Agent
-APP_WELCOMEMESSAGE=Hello! How can I help you today?
+# App Configuration
+APP_NAME=CorticalAI Assistant
+APP_DESCRIPTION=Advanced AI assistant with function calling capabilities
+APP_WELCOMEMESSAGE=Hello! I can search, execute commands, show alerts, and more. How can I help?
 APP_PRIMARYCOLOR=1DB954
 APP_SECONDARYCOLOR=191414
-APP_BACKGROUND_IMAGE=https://example.com/background.jpg
-APP_CHAT_OPACITY=0.9
-APP_LOGO=https://example.com/logo.png
-APP_NAVIGATION_LINKS=Home|/|false,Docs|https://docs.example.com|true
-
-# Features
-APP_EXAMPLES_ENABLED=true
-APP_EXAMPLES_COUNT=6
-APP_BROWSER_ACTIONS=true
 
 # LLM Configuration
 OLLAMA_ENDPOINT=http://localhost:11434/api/generate
-OLLAMA_MODEL=gemma3:1b
-OLLAMA_TIMEOUT=900000
-OLLAMA_STREAM_TIMEOUT=1200000
+OLLAMA_MODEL=gemma2:9b
+
+# Security Settings
+ALLOW_COMMANDS=true
+ALLOW_SCRIPTS=false
+
+# Authentication (optional)
+AUTH_ENABLED=false
+AUTH_MODE=optional
+JWT_SECRET=your-jwt-secret-here
+
+# OAuth Providers (if auth enabled)
+GOOGLE_CLIENT_ID=your-google-client-id
+AZURE_CLIENT_ID=your-azure-client-id
+
+# UI Control
+DISABLE_DEFAULT_UI=false
 ```
 
 ---
 
-## Quick Start Example
+## Enhanced Function System
 
-![Alt text](./assets/example.png)
+### API Functions
+
+These are API calls
+
+```javascript
+functions: {
+  searchData: {
+    type: 'api',
+    endpoint: (query) => `https://api.example.com/search?q=${encodeURIComponent(query)}`,
+    method: 'GET',
+    parseArgs: (raw) => raw.trim(),
+    transform: (data, query) => ({
+      success: true,
+      results: data.results,
+      searchTerm: query
+    }),
+    description: 'Search external API for information'
+  }
+}
+```
+
+### Command Functions
+
+These are terminal commands that are ran on the host server running CorticalAI
+
+```javascript
+functions: {
+  pingHost: {
+    type: 'command',
+    command: (host) => `ping -c 4 ${host}`,
+    parseArgs: (raw) => raw.trim(),
+    allowedCommands: ['ping', 'nslookup'],
+    timeout: 15000,
+    description: 'Test network connectivity to a host'
+  }
+}
+```
+
+### Script Functions
+
+These are functions that execute on the Node.js Express server
+
+```javascript
+functions: {
+  calculateStats: {
+    type: 'script',
+    handler: async function(numbers) {
+      const nums = numbers.split(',').map(Number);
+      return {
+        sum: nums.reduce((a, b) => a + b, 0),
+        average: nums.reduce((a, b) => a + b, 0) / nums.length,
+        count: nums.length
+      };
+    },
+    parseArgs: (raw) => raw.trim(),
+    description: 'Calculate statistics for a list of numbers'
+  }
+}
+```
+
+### N8N Workflow Integration
+
+These are native integrations with the N8N webhook system
+
+```javascript
+functions: {
+  createTicket: {
+    type: 'n8n',
+    webhookId: 'support-ticket',
+    parseArgs: (raw) => {
+      const [title, description] = raw.split('|');
+      return { title, description };
+    },
+    description: 'Create support ticket via N8N workflow'
+  }
+}
+```
+
+---
+
+## Enhanced Quick Start
 
 ```javascript
 import { LLMFramework } from './framework.js';
@@ -113,18 +184,86 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const CONFIG = {
-  systemPrompt: `You are a helpful assistant. You can search, show alerts, open links, and speak to users.`,
+  systemPrompt: `You are an advanced AI assistant with multiple capabilities:
+  - Search information: "search for [topic]"
+  - System commands: "ping [host]" or "check system status"  
+  - Browser actions: "alert [message]" or "open [url]"
+  - Calculations: "calculate stats for [numbers]"`,
 
   functions: {
-    searchMusic: {
-      handler: async (term) => {
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&limit=10`;
-        const response = await fetch(url);
-        const data = await response.json();
-        return { success: true, results: data.results };
+    // DuckDuckGo search with enhanced error handling
+    searchDuck: {
+      type: 'api',
+      endpoint: (query) => {
+        const url = new URL("https://api.duckduckgo.com/");
+        url.searchParams.set('q', query);
+        url.searchParams.set('format', 'json');
+        return url.toString();
       },
-      parseArgs: raw => raw.trim()
+      method: 'GET',
+      parseArgs: (raw) => raw.trim(),
+      transform: (data, query) => {
+        // Enhanced result processing with fallbacks
+        const results = [];
+        
+        if (data.AbstractText) {
+          results.push({
+            title: data.Heading || 'Abstract',
+            content: data.AbstractText,
+            source: data.AbstractSource
+          });
+        }
+        
+        return results.length > 0 ? {
+          success: true,
+          results,
+          totalResults: results.length,
+          searchTerm: query
+        } : {
+          success: true,
+          results: [{
+            title: `Search "${query}"`,
+            content: 'No direct results found.',
+            url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`
+          }],
+          totalResults: 1,
+          searchTerm: query
+        };
+      },
+      description: 'Search DuckDuckGo for information'
+    },
+
+    // Network diagnostics
+    pingHost: {
+      type: 'command',
+      command: (host) => `ping -c 4 ${host}`,
+      parseArgs: (raw) => raw.trim(),
+      allowedCommands: ['ping'],
+      description: 'Test network connectivity'
+    },
+
+    // Statistical calculations
+    calculateStats: {
+      type: 'script',
+      handler: async function(numbersString) {
+        const numbers = numbersString.split(',').map(n => parseFloat(n.trim()));
+        const sum = numbers.reduce((a, b) => a + b, 0);
+        return {
+          numbers,
+          sum,
+          average: sum / numbers.length,
+          min: Math.min(...numbers),
+          max: Math.max(...numbers)
+        };
+      },
+      parseArgs: (raw) => raw.trim(),
+      description: 'Calculate statistics for numbers'
     }
+  },
+
+  security: {
+    allowCommands: true,
+    allowScripts: true
   }
 };
 
@@ -132,190 +271,200 @@ const framework = new LLMFramework(CONFIG);
 framework.start();
 ```
 
-Visit `http://localhost:3001` to see your chat interface live.
+---
+
+## API Documentation
+
+CorticalAI v2.0 automatically generates comprehensive API documentation:
+
+- **Interactive Docs**: Available at `http://localhost:3001/api/docs`
+- **OpenAPI Spec**: Raw specification at `/api/openapi.json`
+- **Function Documentation**: Detailed function info at `/api/v1/functions/docs`
+
+### Key Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/chat/stream` | POST | Stream chat with function calling |
+| `/api/v1/functions` | GET | List available functions |
+| `/api/v1/health` | GET | System status and metrics |
+| `/api/v1/auth/login` | POST | Authenticate user (if auth enabled) |
+| `/api/docs` | GET | Interactive API documentation |
 
 ---
 
-## How It Works
+## Security Features
 
-1. **Incoming user message** → passed to the LLM  
-2. **LLM generates a response**  
-   - Chat reply  
-   - API function call (`FUNCTION:searchMusic:Beatles`)
-   - Browser action (`FUNCTION:showAlert:Task completed!`)
-3. **Framework detects and routes the call**  
-4. **Executes handler or browser action**  
-5. **Streams results back to UI**  
-
-All of this is **automatic** — developers only need to define functions and system prompts.
-
----
-
-## Function Types
-
-### API Functions (Server-side)
+### Command Execution Security
 ```javascript
+security: {
+  allowCommands: true,        // Enable/disable command functions
+  allowScripts: false         // Enable/disable script functions
+}
+
 functions: {
-  searchData: {
-    handler: async (query) => {
-      // API call logic
-      return { success: true, results: data };
-    },
-    parseArgs: raw => raw.trim()
+  secureCommand: {
+    type: 'command',
+    allowedCommands: ['ping', 'nslookup', 'dig'],  // Whitelist
+    timeout: 10000,                                 // Execution timeout
+    maxBuffer: 1024 * 1024                         // Output size limit
   }
 }
 ```
 
-### Browser Actions (Client-side)
-Automatically available when `APP_BROWSER_ACTIONS=true`:
+### Authentication Modes
+- **disabled**: No authentication required
+- **optional**: Authentication available but not required
+- **required**: All endpoints require authentication
 
-- `FUNCTION:showAlert:Your alert message`
-- `FUNCTION:openWindow:https://external-site.com`  
-- `FUNCTION:showModal:https://widget.example.com`
-- `FUNCTION:speak:Text to be spoken aloud`
-
----
-
-## Configuration Reference
-
-### Server Settings
-| Key | Description | Default |
-|-----|-------------|---------|
-| `SERVER_PORT` | Express server port | `3001` |
-| `SERVER_IP` | Server host | `localhost` |
-| `SERVER_ENABLE_CORS` | Enable CORS headers | `true` |
-
-### LLM Settings
-| Key | Description | Default |
-|-----|-------------|---------|
-| `OLLAMA_ENDPOINT` | LLM API endpoint | `http://localhost:11434/api/generate` |
-| `OLLAMA_MODEL` | LLM model to use | `gemma3:1b` |
-| `OLLAMA_TIMEOUT` | Request timeout (ms) | `900000` |
-| `OLLAMA_STREAM_TIMEOUT` | Stream timeout (ms) | `1200000` |
-
-### App Appearance
-| Key | Description | Default |
-|-----|-------------|---------|
-| `APP_NAME` | Application name | `AI Assistant` |
-| `APP_DESCRIPTION` | Application description | `AI-powered assistant` |
-| `APP_WELCOMEMESSAGE` | Initial chat message | `Hello! How can I help you today?` |
-| `APP_PRIMARYCOLOR` | Primary color (hex) | `007bff` |
-| `APP_SECONDARYCOLOR` | Secondary color (hex) | `6c757d` |
-| `APP_BACKGROUND_IMAGE` | Background image/video URL | `null` |
-| `APP_CHAT_OPACITY` | Chat window transparency (0-1) | `0.95` |
-| `APP_LOGO` | Logo image URL | `null` |
-| `APP_NAVIGATION_LINKS` | Menu links (Text\|URL\|External,...) | `null` |
-
-### Features
-| Key | Description | Default |
-|-----|-------------|---------|
-| `APP_EXAMPLES_ENABLED` | Auto-generate example prompts | `true` |
-| `APP_EXAMPLES_COUNT` | Number of examples to generate | `6` |
-| `APP_BROWSER_ACTIONS` | Enable browser action functions | `true` |
-| `APP_FUNCTION_PATTERN` | Regex for detecting function calls | `^FUNCTION:(\\w+):(.+)$` |
-
----
-
-## Advanced Examples
-
-### Multi-Function Agent
+### API Key Management
 ```javascript
-const CONFIG = {
-  systemPrompt: `You are a productivity assistant. You can:
-  - Search information (searchWeb)
-  - Show alerts for reminders (showAlert) 
-  - Open relevant links (openWindow)
-  - Speak confirmations (speak)`,
-  
-  functions: {
-    searchWeb: {
-      handler: async (query) => {
-        // Your search implementation
-      },
-      parseArgs: raw => raw.trim()
-    }
-  }
-};
+auth: {
+  enabled: true,
+  apiKeys: { enabled: true }
+}
 ```
 
-### Custom Branded Experience
-```env
-APP_NAME=Acme Support Bot
-APP_LOGO=https://acme.com/logo.png
-APP_BACKGROUND_IMAGE=https://acme.com/bg.jpg
-APP_PRIMARYCOLOR=ff6b35
-APP_NAVIGATION_LINKS=Home|https://acme.com|true,Support|mailto:help@acme.com|true
+Automatically generates:
+- Admin API key for full access
+- UI API key for frontend communication
+
+---
+
+## Enhanced Configuration
+
+### New Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AUTH_ENABLED` | Enable authentication system | `false` |
+| `AUTH_MODE` | Authentication mode | `disabled` |
+| `ALLOW_COMMANDS` | Enable command functions | `false` |
+| `ALLOW_SCRIPTS` | Enable script functions | `false` |
+| `DISABLE_DEFAULT_UI` | Disable built-in UI | `false` |
+| `JWT_SECRET` | JWT signing secret | Auto-generated |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | None |
+| `AZURE_CLIENT_ID` | Azure OAuth client ID | None |
+
+### Context-Aware Features
+
+The framework now automatically includes:
+- User's browser and operating system
+- Current date and time with timezone
+- IP address and geolocation (if available)
+- System information (memory, CPU, platform)
+- Request metadata and headers
+
+---
+
+## Function Call Examples
+
+### Search Operations
+```
+User: "search for artificial intelligence"
+Assistant: FUNCTION:searchDuck:artificial intelligence
+
+User: "what's the weather in London"  
+Assistant: FUNCTION:getWeather:London
+```
+
+### System Operations
+```
+User: "ping google.com"
+Assistant: FUNCTION:pingHost:google.com
+
+User: "check system status"
+Assistant: FUNCTION:getSystemInfo:
+```
+
+### Browser Actions
+```
+User: "alert me when done"
+Assistant: FUNCTION:showAlert:Task completed successfully!
+
+User: "open the documentation"
+Assistant: FUNCTION:openWindow:https://docs.example.com
+```
+
+### Data Processing
+```
+User: "calculate stats for 1,5,10,15,20"
+Assistant: FUNCTION:calculateStats:1,5,10,15,20
 ```
 
 ---
 
-## Browser Action Security
+## Production Deployment
 
-Browser actions run in the client's browser with appropriate restrictions:
-
-- **Modals**: Use iframe sandboxing for security
-- **Window navigation**: Opens in new tabs with `noopener,noreferrer`
-- **Speech**: Uses native Web Speech API
-- **Alerts**: Standard browser alert dialogs
-
----
-
-## Model Requirements
-
-- Must support **function calling** (e.g., Gemma, GPT, Claude)
-- Must support streaming for optimal UX  
-- Should handle structured output patterns
-- Recommended: Models with strong instruction following
-
----
-
-## Example Interactions
-
-```
-User: "Remind me about the meeting"
-LLM: FUNCTION:showAlert:Don't forget: Team meeting at 3 PM today
-
-User: "Show me the project dashboard" 
-LLM: FUNCTION:showModal:https://dashboard.example.com
-
-User: "Open the documentation"
-LLM: FUNCTION:openWindow:https://docs.example.com
-
-User: "Welcome our new user"
-LLM: FUNCTION:speak:Welcome to our platform! We're excited to have you here.
+### Docker Support
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+EXPOSE 3001
+CMD ["node", "index.js"]
 ```
 
+### Environment Security
+- Use strong JWT secrets in production
+- Configure proper CORS origins
+- Enable HTTPS with certificates
+- Use environment-specific OAuth credentials
+- Implement rate limiting for public endpoints
+
+### Monitoring
+- Health endpoint at `/api/v1/health` includes system metrics
+- Comprehensive error logging with context
+- Request/response tracking for debugging
+- Function execution metrics and timing
+
 ---
 
-## Deployment
+## Migration from v1.x
 
-CorticalAI works anywhere Node.js runs:
+### Breaking Changes
+- Function definition format changed (add `type` field)
+- New authentication system (optional)
+- Enhanced security controls
+- Updated API endpoints (now under `/api/v1/`)
 
-- **Development**: `npm start` 
-- **Production**: PM2, Docker, or cloud platforms
-- **Docker**: Dockerfile included for containerization
-- **Cloud**: Deploy to Heroku, Railway, DigitalOcean, etc.
+### Migration Steps
+1. Update function definitions to include `type` field
+2. Install new dependencies: `jsonwebtoken swagger-jsdoc swagger-ui-express`
+3. Update environment variables (see new configuration)
+4. Test function calling with enhanced error handling
+5. Review security settings for command/script functions
 
 ---
 
 ## Contributing
 
-- PRs welcome for new features and bug fixes
-- Ensure functions support `async` execution and proper error handling
-- Keep UI dynamic: all new functions should display results automatically
-- Follow the existing code style and patterns
-- Add tests for new functionality
+- Follow security best practices for new functions
+- Add comprehensive error handling and validation
+- Include function documentation and examples
+- Test with multiple LLM models for compatibility
+- Update API documentation for new endpoints
 
 ---
 
 ## Roadmap
 
-- [ ] ChromaDB implementation for RAG
-- [ ] VOIP Integration  
-- [ ] React Frontend
-- [ ] Generalization of API for custom front end
-- [ ] WebSocket support for real-time updates
-- [ ] Mobile app wrapper (React Native)
+### Completed in v2.0
+- ✅ Enhanced function type system
+- ✅ Multi-provider authentication
+- ✅ Auto-generated API documentation
+- ✅ Context-aware system prompts
+- ✅ Security controls and sandboxing
+
+### Upcoming Features
+- [ ] React frontend components package
+- [ ] ChromaDB RAG integration
+- [ ] WebSocket real-time communication
+- [ ] Docker Compose orchestration
+- [ ] Kubernetes deployment manifests
+- [ ] Performance monitoring dashboard
 
 ---
 
