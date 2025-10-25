@@ -6,7 +6,11 @@ import crypto from "crypto";
 import { exec } from "child_process";
 import { promisify } from "util";
 import os from "os";
+import { Server as SocketIOServer } from 'socket.io';
+import http from 'http';
+import { ChromaClient } from 'chromadb';
 import swaggerJsdoc from "swagger-jsdoc";
+import client from 'prom-client';
 import swaggerUi from "swagger-ui-express";
 
 const execAsync = promisify(exec);
@@ -60,6 +64,13 @@ export interface FrameworkConfig {
         timeout: number;
         streamTimeout: number;
     };
+    openAILLM?: {
+        endpoint?: string;
+        apiKey?: string;
+        model?: string;
+        timeout?: number;
+        streamTimeout?: number;
+    };
     app: AppConfig;
     systemPrompt: string;
     functionPattern: RegExp;
@@ -79,6 +90,10 @@ export interface FrameworkConfig {
     };
     n8n?: {
         endpoint: string;
+    };
+    chroma?: {
+        endpoint: string;
+        collectionName: string;
     };
 }
 
@@ -232,6 +247,34 @@ class FunctionRegistry {
         });
     }
 
+    registerRAG(name: string, config: any) {
+        this.register('rag', name, {
+            handler: async (args: any) => {
+                try {
+                    if (!this.config.chroma?.endpoint) throw new Error('ChromaDB endpoint not configured');
+                    if (!this.config.chroma?.collectionName) throw new Error('ChromaDB collection name not configured');
+
+                    const chromaConfig = this.config.chroma;
+                    const client = new ChromaClient({ path: chromaConfig.endpoint });
+                    const collection = await client.getOrCreateCollection({ name: chromaConfig.collectionName });
+
+                    const queryText = typeof config.query === 'function' ? config.query(args) : args.query;
+
+                    const results = await collection.query({
+                        queryTexts: [queryText],
+                        nResults: config.nResults || 5,
+                    });
+
+                    return { success: true, results: results.documents };
+                } catch (error: any) {
+                    return { success: false, error: error.message };
+                }
+            },
+            parseArgs: config.parseArgs,
+            description: config.description || `Retrieve information from ChromaDB: ${name}`
+        });
+    }
+
     get(name: string): FunctionDefinition | undefined {
         return this.functions.get(name);
     }
@@ -321,17 +364,17 @@ class ContextEnhancer {
         };
     }
 
-    enhanceRequestContext(req: Request): any {
-        const userAgent = req.headers['user-agent'] || '';
+    enhanceRequestContext(req: Request | any): any {
+        const userAgent = (req.headers && req.headers['user-agent']) || '';
         return {
             timestamp: new Date().toISOString(),
             request: {
-                ip: req.ip || 'unknown',
+                ip: (req.ip || (req.socket && req.socket.remoteAddress)) || 'unknown',
                 userAgent,
                 browser: this.parseUserAgent(userAgent),
-                host: req.headers.host,
-                method: req.method,
-                path: req.path
+                host: req.headers && req.headers.host,
+                method: req.method || 'WebSocket',
+                path: req.path || req.url || 'N/A'
             },
             system: this.systemInfo
         };
@@ -350,7 +393,7 @@ class ContextEnhancer {
         return { name: browser, os };
     }
 
-    generateSystemPrompt(basePrompt: string, context: any, user: any = null): string {
+    generateSystemPrompt(basePrompt: string, context: any, user: any = null, ragContext: string | null = null): string {
         const currentTime = new Date().toLocaleString();
         const contextualInfo = `
 SYSTEM CONTEXT (Current Session):
@@ -358,6 +401,9 @@ SYSTEM CONTEXT (Current Session):
 - User's Browser: ${context.request.browser.name} on ${context.request.browser.os}
 - Server: ${context.system.platform} ${context.system.arch}
 ${user ? `- User: ${user.email} (${user.role})` : '- Anonymous Session'}
+${ragContext ? `
+RETRIEVED KNOWLEDGE:
+${ragContext}` : ''}
 
 FUNCTION CALLING RULES:
 - Use EXACTLY this format: FUNCTION:functionName:arguments
@@ -371,23 +417,151 @@ RESPONSE GUIDELINES:
     }
 }
 
+class MetricsCollector {
+    public chatMessagesCounter: client.Counter;
+    public llmResponseTimeHistogram: client.Histogram;
+    public functionCallCounter: client.Counter;
+    public functionCallDurationHistogram: client.Histogram;
+
+    constructor() {
+        client.collectDefaultMetrics();
+
+        this.chatMessagesCounter = new client.Counter({
+            name: 'corticalai_chat_messages_total',
+            help: 'Total number of chat messages processed',
+        });
+
+        this.llmResponseTimeHistogram = new client.Histogram({
+            name: 'corticalai_llm_response_time_seconds',
+            help: 'Histogram of LLM response times',
+            buckets: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50], // 0-50 seconds in 5s increments
+        });
+
+        this.functionCallCounter = new client.Counter({
+            name: 'corticalai_function_calls_total',
+            help: 'Total number of function calls',
+            labelNames: ['function_name', 'function_type', 'status'],
+        });
+
+        this.functionCallDurationHistogram = new client.Histogram({
+            name: 'corticalai_function_call_duration_seconds',
+            help: 'Histogram of function call durations',
+            labelNames: ['function_name', 'function_type'],
+            buckets: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // 0-10 seconds in 1s increments
+        });
+    }
+
+    public getMetrics() {
+        return client.register.metrics();
+    }
+}
+
 export class LLMFramework {
     public app: Express;
+    private httpServer: http.Server;
+    private io: SocketIOServer;
+    private metricsCollector: MetricsCollector;
     private config: FrameworkConfig;
     private functionRegistry: FunctionRegistry;
     private contextEnhancer: ContextEnhancer;
-    private authManager: AuthenticationManager | null = null;
+    private authManager: AuthenticationManager | undefined;
     private examplePrompts: string[] = [];
 
     constructor(config: Partial<FrameworkConfig>) {
         this.config = this.mergeWithDefaults(config as FrameworkConfig);
         this.app = express();
+        this.httpServer = http.createServer(this.app);
+        this.io = new SocketIOServer(this.httpServer, {
+            cors: {
+                origin: "*", // Allow all origins for now, refine later
+                methods: ["GET", "POST"]
+            }
+        });
         this.functionRegistry = new FunctionRegistry(this.config);
         this.contextEnhancer = new ContextEnhancer();
+        this.metricsCollector = new MetricsCollector();
 
         this.setupMiddleware();
         this.validateConfiguration();
         this.initializeComponents();
+        this.setupWebSockets();
+    }
+
+    private setupWebSockets() {
+        this.io.on('connection', (socket) => {
+            console.log('WebSocket client connected', socket.id);
+
+            socket.on('disconnect', () => {
+                console.log('WebSocket client disconnected', socket.id);
+            });
+
+            socket.on('chatMessage', async (message: string, callback: (response: any) => void) => {
+                this.metricsCollector.chatMessagesCounter.inc();
+                const context = this.contextEnhancer.enhanceRequestContext(socket.request);
+
+                try {
+                    const functionCall = this.detectFunctionCall(message);
+                    let ragContext: string | null = null;
+
+                    if (functionCall && this.functionRegistry.get(functionCall.function)?.type === 'rag') {
+                        socket.emit('llmToken', { type: "status", text: "Retrieving knowledge..." });
+                        try {
+                            const func = this.functionRegistry.get(functionCall.function);
+                            if (!func) throw new Error(`Function ${functionCall.function} not found`);
+                            const result = await func.handler(functionCall.args);
+                            if (result.success && result.results) {
+                                ragContext = result.results.join('\n\n');
+                                socket.emit('llmToken', { type: "status", text: "Knowledge retrieved." });
+                            } else if (result.error) {
+                                socket.emit('llmToken', { type: "error", error: `RAG Error: ${result.error}` });
+                            }
+                        } catch (error: any) {
+                            socket.emit('llmToken', { type: "error", error: `RAG Function Error: ${error.message}` });
+                        }
+                    }
+
+                    const systemPrompt = this.contextEnhancer.generateSystemPrompt(this.config.systemPrompt, context, null, ragContext);
+                    const fullPrompt = `${systemPrompt}\n\nUser says: "${message}"\n\nAssistant responds: `;
+
+                    if (functionCall && this.functionRegistry.get(functionCall.function)?.type !== 'rag') {
+                        const funcName = functionCall.function;
+                        const funcType = this.functionRegistry.get(funcName)?.type || 'unknown';
+                        const end = this.metricsCollector.functionCallDurationHistogram.startTimer({ function_name: funcName, function_type: funcType });
+                        socket.emit('llmToken', { type: "status", text: "Processing your request..." });
+                        try {
+                            const func = this.functionRegistry.get(functionCall.function);
+                            if (!func) throw new Error(`Function ${functionCall.function} not found`);
+
+                            const result = await func.handler(functionCall.args);
+                            if (result.success && result.browserAction) {
+                                socket.emit('llmToken', { type: "browser_action", action: result.browserAction, data: result.data });
+                                socket.emit('llmToken', { type: "token", text: this.getBrowserActionConfirmation(result.browserAction, result.data) });
+                                this.metricsCollector.functionCallCounter.inc({ function_name: funcName, function_type: funcType, status: 'success' });
+                            } else if (result.results || result.success) {
+                                socket.emit('llmToken', { type: "function_result", data: result });
+                                this.metricsCollector.functionCallCounter.inc({ function_name: funcName, function_type: funcType, status: 'success' });
+                            }
+                            socket.emit('llmToken', { type: "done" });
+                            end();
+                        } catch (error: any) {
+                            socket.emit('llmToken', { type: "error", error: error.message });
+                            this.metricsCollector.functionCallCounter.inc({ function_name: funcName, function_type: funcType, status: 'error' });
+                            end();
+                        }
+                    } else if (!functionCall || (functionCall && this.functionRegistry.get(functionCall.function)?.type === 'rag' && ragContext)) {
+                        if (this.config.openAILLM?.endpoint) {
+                            await this.streamOpenAILLMResponse([{ role: 'system', content: systemPrompt }, { role: 'user', content: message }], socket);
+                        } else {
+                            await this.streamLLMResponse(fullPrompt, socket);
+                        }
+                    }
+                } catch (error: any) {
+                    console.error("WebSocket chat error:", error);
+                    socket.emit('llmToken', { type: "error", error: error.message });
+                }
+                if (callback) callback({ status: 'processed' });
+            });
+        });
     }
 
     private initializeComponents() {
@@ -406,6 +580,7 @@ export class LLMFramework {
                 case 'command': this.functionRegistry.registerCommand(name, definition); break;
                 case 'script': this.functionRegistry.registerScript(name, definition); break;
                 case 'n8n': this.functionRegistry.registerN8N(name, definition); break;
+                case 'rag': this.functionRegistry.registerRAG(name, definition); break;
                 default: console.warn(`Unknown function type: ${definition.type || '(none)'}`);
             }
         });
@@ -429,6 +604,7 @@ export class LLMFramework {
         const defaults: FrameworkConfig = {
             server: { port: 3001, ip: "localhost", corsEnabled: true },
             llm: { endpoint: "http://localhost:11434/api/generate", model: "gemma3:1b", timeout: 900000, streamTimeout: 1200000 },
+            openAILLM: { endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-3.5-turbo", timeout: 900000, streamTimeout: 1200000 },
             app: { name: "AI Assistant", description: "AI-powered assistant", welcomeMessage: "Hello! How can I help you today?", primaryColor: "#007bff", secondaryColor: "#6c757d", backgroundImage: null, chatOpacity: 0.95, logo: null, botAvatar: null, browserActions: true, darkMode: false },
             systemPrompt: '',
             functionPattern: /^FUNCTION:(\w+):(.+)$/,
@@ -438,7 +614,19 @@ export class LLMFramework {
             examples: { enabled: true, count: 6 }
         };
         // Simple deep merge, can be improved
-        return { ...defaults, ...config, server: { ...defaults.server, ...config.server }, llm: { ...defaults.llm, ...config.llm }, app: { ...defaults.app, ...config.app }, auth: { ...defaults.auth, ...config.auth }, security: { ...defaults.security, ...config.security }, examples: { ...defaults.examples, ...config.examples } };
+        return {
+            ...defaults,
+            ...config,
+            server: { ...defaults.server, ...config.server },
+            llm: { ...defaults.llm, ...config.llm },
+            openAILLM: { ...defaults.openAILLM, ...config.openAILLM },
+            app: { ...defaults.app, ...config.app },
+            auth: { ...defaults.auth, ...config.auth },
+            security: { ...defaults.security, ...config.security },
+            examples: { ...defaults.examples, ...config.examples },
+            chroma: config.chroma ? { ...config.chroma } : undefined,
+            n8n: config.n8n ? { ...config.n8n } : undefined
+        };
     }
 
     private setupMiddleware() {
@@ -485,17 +673,22 @@ export class LLMFramework {
         return confirmations[action] || `Browser action completed: ${action}`;
     }
 
-    private async streamLLMResponse(prompt: string, res: Response) {
+    private async streamLLMResponse(prompt: string, socket: any) {
+        const end = this.metricsCollector.llmResponseTimeHistogram.startTimer();
         const response = await fetch(this.config.llm.endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model: this.config.llm.model, prompt, stream: true })
         });
 
-        if (!response.ok) throw new Error(`LLM API error: ${response.status}`);
+        if (!response.ok) {
+            end(); // End timer even on error
+            throw new Error(`LLM API error: ${response.status}`);
+        }
 
         return new Promise<void>((resolve, reject) => {
             if (!response.body) {
+                end(); // End timer even on error
                 reject(new Error('Response body is null'));
                 return;
             }
@@ -505,10 +698,10 @@ export class LLMFramework {
                     if (line.trim()) {
                         try {
                             const parsed = JSON.parse(line);
-                            if (parsed.response) res.write(`data: ${JSON.stringify({ type: "token", text: parsed.response })}\n\n`);
+                            if (parsed.response) socket.emit('llmToken', { type: "token", text: parsed.response });
                             if (parsed.done) {
-                                res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-                                res.end();
+                                socket.emit('llmToken', { type: "done" });
+                                end(); // End timer on successful completion
                                 resolve();
                                 return;
                             }
@@ -519,90 +712,445 @@ export class LLMFramework {
                 }
             });
             response.body.on('end', () => {
-                if (!res.writableEnded) {
-                    res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-                    res.end();
-                }
+                socket.emit('llmToken', { type: "done" });
+                end(); // End timer on stream end
                 resolve();
             });
-            response.body.on('error', reject);
+            response.body.on('error', (err) => {
+                end(); // End timer on error
+                reject(err);
+            });
+        });
+    }
+
+    private async streamOpenAILLMResponse(messages: Array<{ role: string; content: string }>, socket: any) {
+        const end = this.metricsCollector.llmResponseTimeHistogram.startTimer();
+        const openAILLMConfig = this.config.openAILLM;
+        if (!openAILLMConfig || !openAILLMConfig.endpoint) {
+            end(); // End timer even on error
+            throw new Error("OpenAI LLM endpoint not configured.");
+        }
+
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+        };
+        if (openAILLMConfig.apiKey) {
+            headers["Authorization"] = `Bearer ${openAILLMConfig.apiKey}`;
+        }
+
+        const body = JSON.stringify({
+            model: openAILLMConfig.model,
+            messages: messages,
+            stream: true,
+        });
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), openAILLMConfig.streamTimeout);
+
+        const response = await fetch(openAILLMConfig.endpoint, {
+            method: "POST",
+            headers: headers,
+            body: body,
+            signal: controller.signal, // Use the signal from AbortController
+        });
+
+        clearTimeout(timeoutId); // Clear timeout if fetch completes before timeout
+
+        if (!response.ok) {
+            end(); // End timer even on error
+            const errorText = await response.text();
+            throw new Error(`OpenAI LLM API error: ${response.status} - ${errorText}`);
+        }
+
+        return new Promise<void>((resolve, reject) => {
+            if (!response.body) {
+                end(); // End timer even on error
+                reject(new Error('Response body is null'));
+                return;
+            }
+
+            response.body.on('data', (chunk: Buffer) => {
+                const lines = chunk.toString().split('\n');
+                for (const line of lines) {
+                    if (line.trim() === 'data: [DONE]') {
+                        socket.emit('llmToken', { type: "done" });
+                        end(); // End timer on successful completion
+                        resolve();
+                        return;
+                    }
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const parsed = JSON.parse(line.substring(6));
+                            if (parsed.choices && parsed.choices.length > 0) {
+                                const delta = parsed.choices[0].delta;
+                                if (delta.content) {
+                                    socket.emit('llmToken', { type: "token", text: delta.content });
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Parse error:', e);
+                        }
+                    }
+                }
+            });
+
+            response.body.on('end', () => {
+                socket.emit('llmToken', { type: "done" });
+                end(); // End timer on stream end
+                resolve();
+            });
+
+            response.body.on('error', (err) => {
+                end(); // End timer on error
+                reject(err);
+            });
         });
     }
 
     public setupRoutes() {
-        /**
-         * @swagger
-         * /api/v1/chat/stream:
-         *   post:
-         *     summary: Stream chat responses from the LLM.
-         *     description: Sends a message to the LLM and streams back the response, supporting function calls and browser actions.
-         *     tags:
-         *       - Chat
-         *     requestBody:
-         *       required: true
-         *       content:
-         *         application/json:
-         *           schema:
-         *             type: object
-         *             required:
-         *               - message
-         *             properties:
-         *               message:
-         *                 type: string
-         *                 description: The user's message to the AI.
-         *     responses:
-         *       200:
-         *         description: A stream of chat responses (tokens, function results, browser actions, or errors).
-         *         content:
-         *           text/event-stream:
-         *             schema:
-         *               type: string
-         *               example: "data: {\"type\":\"token\",\"text\":\"Hello\"}\n\ndata: {\"type\":\"done\"}\n\n"
-         *       401:
-         *         description: Authentication required if enabled.
-         *       500:
-         *         description: Internal server error.
-         */
+
+
         this.app.post("/api/v1/chat/stream", this.authManager?.requireAuth(['chat']) || ((req: Request, res: Response, next: NextFunction) => next()), async (req: Request, res: Response) => {
+
             const { message } = req.body;
+
             const context = this.contextEnhancer.enhanceRequestContext(req);
+
+
 
             res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
 
+
+
             try {
-                const systemPrompt = this.contextEnhancer.generateSystemPrompt(this.config.systemPrompt, context, (req as any).auth?.user);
-                const fullPrompt = `${systemPrompt}\n\nUser says: "${message}"\n\nAssistant responds: `;
+
                 const functionCall = this.detectFunctionCall(message);
 
-                if (functionCall) {
-                    res.write(`data: ${JSON.stringify({ type: "status", text: "Processing your request..." })}\n\n`);
+                let ragContext: string | null = null;
+
+
+
+                // If a RAG function is explicitly called, execute it
+
+                if (functionCall && this.functionRegistry.get(functionCall.function)?.type === 'rag') {
+
+                    res.write(`data: ${JSON.stringify({ type: "status", text: "Retrieving knowledge..." })}\n\n`);
+
                     try {
+
                         const func = this.functionRegistry.get(functionCall.function);
+
                         if (!func) throw new Error(`Function ${functionCall.function} not found`);
 
                         const result = await func.handler(functionCall.args);
-                        if (result.success && result.browserAction) {
-                            res.write(`data: ${JSON.stringify({ type: "browser_action", action: result.browserAction, data: result.data })}\n\n`);
-                            res.write(`data: ${JSON.stringify({ type: "token", text: this.getBrowserActionConfirmation(result.browserAction, result.data) })}\n\n`);
-                        } else if (result.results || result.success) {
-                            res.write(`data: ${JSON.stringify({ type: "function_result", data: result })}\n\n`);
+
+                        if (result.success && result.results) {
+
+                            ragContext = result.results.join('\n\n'); // Join retrieved documents
+
+                            res.write(`data: ${JSON.stringify({ type: "status", text: "Knowledge retrieved." })}\n\n`);
+
+                        } else if (result.error) {
+
+                            res.write(`data: ${JSON.stringify({ type: "error", error: `RAG Error: ${result.error}` })}\n\n`);
+
                         }
-                        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
-                        res.end();
+
                     } catch (error: any) {
-                        res.write(`data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`);
-                        res.end();
+
+                        res.write(`data: ${JSON.stringify({ type: "error", error: `RAG Function Error: ${error.message}` })}\n\n`);
+
                     }
-                } else {
-                    await this.streamLLMResponse(fullPrompt, res);
+
                 }
+
+
+
+                const systemPrompt = this.contextEnhancer.generateSystemPrompt(this.config.systemPrompt, context, (req as any).auth?.user, ragContext);
+
+                const fullPrompt = `${systemPrompt}\n\nUser says: "${message}"\n\nAssistant responds: `;
+
+
+
+                if (functionCall && this.functionRegistry.get(functionCall.function)?.type !== 'rag') {
+
+                    res.write(`data: ${JSON.stringify({ type: "status", text: "Processing your request..." })}\n\n`);
+
+                    try {
+
+                        const func = this.functionRegistry.get(functionCall.function);
+
+                        if (!func) throw new Error(`Function ${functionCall.function} not found`);
+
+
+
+                        const result = await func.handler(functionCall.args);
+
+                        if (result.success && result.browserAction) {
+
+                            res.write(`data: ${JSON.stringify({ type: "browser_action", action: result.browserAction, data: result.data })}\n\n`);
+
+                            res.write(`data: ${JSON.stringify({ type: "token", text: this.getBrowserActionConfirmation(result.browserAction, result.data) })}\n\n`);
+
+                        } else if (result.results || result.success) {
+
+                            res.write(`data: ${JSON.stringify({ type: "function_result", data: result })}\n\n`);
+
+                        }
+
+                        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+
+                        res.end();
+
+                    } catch (error: any) {
+
+                        res.write(`data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`);
+
+                        res.end();
+
+                    }
+
+                } else if (!functionCall || (functionCall && this.functionRegistry.get(functionCall.function)?.type === 'rag' && ragContext)) {
+
+                    await this.streamLLMResponse(fullPrompt, res);
+
+                }
+
             } catch (error: any) {
+
                 console.error("Chat error:", error);
+
                 res.write(`data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`);
+
                 res.end();
+
             }
+
         });
 
+
+
+        /**
+
+         * @swagger
+
+         * /api/v1/chat/completions:
+
+         *   post:
+
+         *     summary: Get chat completions from an OpenAPI-compatible LLM.
+
+         *     description: Sends a list of messages to a configurable OpenAPI-compatible LLM and streams back the response.
+
+         *     tags:
+
+         *       - Chat
+
+         *     requestBody:
+
+         *       required: true
+
+         *       content:
+
+         *         application/json:
+
+         *           schema:
+
+         *             type: object
+
+         *             required:
+
+         *               - messages
+
+         *             properties:
+
+         *               messages:
+
+         *                 type: array
+
+         *                 items:
+
+         *                   type: object
+
+         *                   properties:
+
+         *                     role:
+
+         *                       type: string
+
+         *                       enum: [system, user, assistant]
+
+         *                       description: The role of the message sender.
+
+         *                     content:
+
+         *                       type: string
+
+         *                       description: The content of the message.
+
+         *                 description: A list of messages comprising the conversation so far.
+
+         *     responses:
+
+         *       200: 
+
+         *         description: A stream of chat completion tokens.
+
+         *         content:
+
+         *           text/event-stream:
+
+         *             schema:
+
+         *               type: string
+
+         *               example: "data: {\"type\":\"token\",\"text\":\"Hello\"}\n\ndata: {\"type\":\"done\"}\n\n"
+
+         *       401:
+
+         *         description: Authentication required if enabled.
+
+         *       500:
+
+         *         description: Internal server error.
+
+         */
+
+        this.app.post("/api/v1/chat/completions", this.authManager?.requireAuth(['chat']) || ((req: Request, res: Response, next: NextFunction) => next()), async (req: Request, res: Response) => {
+
+            const { messages } = req.body;
+
+            if (!messages || !Array.isArray(messages)) {
+
+                return res.status(400).json({ error: "Messages array is required." });
+
+            }
+
+
+
+            res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
+
+
+
+            try {
+
+                if (this.config.openAILLM?.endpoint) {
+
+                    await this.streamOpenAILLMResponse(messages, res);
+
+                } else {
+
+                    // Fallback to existing LLM if OpenAPI endpoint is not configured
+
+                    const systemPrompt = messages.find(m => m.role === 'system')?.content || '';
+
+                    const userMessage = messages.filter(m => m.role === 'user').map(m => m.content).join('\n');
+
+                    const assistantMessage = messages.filter(m => m.role === 'assistant').map(m => m.content).join('\n');
+
+
+
+                    let fullPrompt = systemPrompt;
+
+                    if (userMessage) fullPrompt += `\n\nUser says: "${userMessage}"`;
+
+                    if (assistantMessage) fullPrompt += `\n\nAssistant responds: "${assistantMessage}"`;
+
+                    fullPrompt += `\n\nAssistant responds: `; // To prompt the assistant for a response
+
+
+
+                    await this.streamLLMResponse(fullPrompt, res);
+
+                }
+
+            } catch (error: any) {
+
+                console.error("OpenAPI chat completions error:", error);
+
+                res.write(`data: ${JSON.stringify({ type: "error", error: error.message })}\n\n`);
+
+                res.end();
+
+            }
+
+        });
+
+
+
+        /**
+
+         * @swagger
+
+         * /api/v1/config:
+
+         *   get:
+
+         *     summary: Get public application configuration.
+
+         *     description: Returns public configuration details of the application, including app name, function count, and authentication status.
+
+         *     tags:
+
+         *       - Configuration
+
+         *     responses:
+
+         *       200:
+
+         *         description: Public configuration details.
+
+         *         content:
+
+         *           application/json:
+
+         *             schema:
+
+         *               type: object
+
+         *               properties:
+
+         *                 success:
+
+         *                   type: boolean
+
+         *                   example: true
+
+         *                 config:
+
+         *                   type: object
+
+         *                   properties:
+
+         *                     app:
+
+         *                       type: object
+
+         *                       description: Application details.
+
+         *                     functions: 
+
+         *                       type: number
+
+         *                       description: Number of registered functions.
+
+         *                     auth:
+
+         *                       type: object
+
+         *                       properties:
+
+         *                         enabled:
+
+         *                           type: boolean
+
+         *                           description: Authentication enabled status.
+
+         *       401:
+
+         *         description: Authentication required if enabled.
+
+         */
         /**
          * @swagger
          * /api/v1/config:
@@ -759,11 +1307,16 @@ export class LLMFramework {
             const context = this.contextEnhancer.enhanceRequestContext(req);
             res.json({ status: "ok", app: this.config.app.name, version: "2.0.0", features: { functions: this.functionRegistry.getAll().length, auth: !!this.authManager, ui: process.env.DISABLE_DEFAULT_UI !== 'true' }, system: context.system, timestamp: new Date().toISOString() });
         });
+
+        this.app.get("/metrics", async (req: Request, res: Response) => {
+            res.set('Content-Type', client.register.contentType);
+            res.end(await this.metricsCollector.getMetrics());
+        });
     }
 
     public async start() {
         this.setupRoutes();
-        this.app.listen(this.config.server.port, this.config.server.ip, () => {
+        this.httpServer.listen(this.config.server.port, this.config.server.ip, () => {
             console.log(`
 ╔══════════════════════════════════════════════════════════════════════════════════════════╗
 ║   🧠 CorticalAI v2.0 - Enhanced Framework                                                 ║
