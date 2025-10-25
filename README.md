@@ -51,6 +51,7 @@ into a single, production-ready package.
 git clone https://github.com/amosroger91/CorticalAI.git
 cd CorticalAI
 npm install
+npm install -g pm2 # Install PM2 globally for process management
 ```
 
 ### Environment Configuration
@@ -72,7 +73,7 @@ APP_SECONDARYCOLOR=191414
 
 # LLM Configuration
 OLLAMA_ENDPOINT=http://localhost:11434/api/generate
-OLLAMA_MODEL=gemma2:9b
+OLLAMA_MODEL=qwen3:0.6b # Ensure this model is available in your local Ollama instance. You might need to run 'ollama pull qwen3:0.6b'. Note: Network issues might prevent model download.
 
 # Security Settings
 ALLOW_COMMANDS=true
@@ -90,6 +91,37 @@ AZURE_CLIENT_ID=your-azure-client-id
 # UI Control
 DISABLE_DEFAULT_UI=false
 ```
+
+---
+
+## How to Run
+
+### 1. Start the Backend Server
+
+After installing dependencies and configuring your `.env` file, start the backend server using PM2:
+
+```bash
+npx tsc # Compile TypeScript to JavaScript
+pm2 start dist/examples/duckduck-go/index.js --name cortical-ai-backend
+```
+
+Verify the backend is running:
+
+```bash
+pm2 list
+```
+
+### 2. Start the Frontend Application
+
+Navigate to the `frontend` directory and start the development server:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend will typically be available at `http://localhost:5173` (or another port if 5173 is in use).
 
 ---
 

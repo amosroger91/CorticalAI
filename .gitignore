@@ -56,3 +56,6 @@ docker-compose.override.yml
 *.local
 
 forClaude.txt
+
+# Compiled output directory
+dist/

@@ -5,13 +5,13 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo 'Tests not implemented yet'",
+    "test": "node e2e-test.mjs",
     "example:duckduck": "cd examples/duckduck-go && npm run dev",
     "start-chroma": "docker run -d --name chromadb -p 8000:8000 chromadb/chroma:latest || docker start chromadb",
     "stop-chroma": "docker stop chromadb || true",
     "remove-chroma": "docker rm chromadb --force || true",
     "reset-chroma": "npm run stop-chroma && npm run remove-chroma",
-    "dev": "sudo npm run reset-chroma && concurrently \"sudo docker run -d --name chromadb -p 8000:8000 chromadb/chroma:latest || sudo docker start chromadb\" \"cd examples/duckduck-go && NODE_ENV=development node index.js\" \"cd frontend && sudo npm run dev\""
+    "dev": "concurrently \"npm:start-chroma\" \"nodemon --loader ts-node/esm examples/duckduck-go/index.ts\" \"cd frontend && npm run dev\""
   },
   "dependencies": {
     "body-parser": "^1.20.2",
@@ -23,7 +23,15 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
-    "concurrently": "^9.2.0"
+    "@types/body-parser": "^1.19.6",
+    "@types/express": "^5.0.4",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.9.1",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "concurrently": "^9.2.0",
+    "nodemon": "^3.1.10",
+    "typescript": "^5.9.3"
   },
   "keywords": [
     "ai",
